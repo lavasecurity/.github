@@ -42,10 +42,49 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-      - name: Scan working tree for secrets
+        with:
+          # Full history so we can read .gitleaks.toml from the PR's base commit.
+          fetch-depth: 0
+      - name: Resolve a trusted gitleaks config
+        id: glcfg
+        # gitleaks auto-loads `<source>/.gitleaks.toml`. On pull_request that working
+        # tree is attacker-controlled, so a PR could add a config that allowlists
+        # everything and pass the scan while leaking. We pin --config to a copy taken
+        # from the BASE ref (which the PR cannot change); fall back to the repo's own
+        # config only when the base has none yet (the PR that first introduces it), and
+        # to the gitleaks default ruleset when there is no repo config at all. Because
+        # --config is always set, gitleaks never silently honours an attacker-supplied
+        # /repo/.gitleaks.toml.
         run: |
-          docker run --rm -v "$PWD:/repo" ghcr.io/gitleaks/gitleaks:v8.21.2 \
-            detect --no-git --source=/repo --no-banner --redact --exit-code=1
+          set -euo pipefail
+          dest="$RUNNER_TEMP/gitleaks-config"
+          mkdir -p "$dest"
+          out="$dest/.gitleaks.toml"
+          if [ "${{ github.event_name }}" = "pull_request" ]; then
+            base='${{ github.event.pull_request.base.sha }}'
+            if git cat-file -e "$base:.gitleaks.toml" 2>/dev/null; then
+              git show "$base:.gitleaks.toml" > "$out"
+            elif [ -f .gitleaks.toml ]; then
+              cp .gitleaks.toml "$out"
+            fi
+          elif [ -f .gitleaks.toml ]; then
+            cp .gitleaks.toml "$out"
+          fi
+          if [ ! -f "$out" ]; then
+            printf '[extend]\nuseDefault = true\n' > "$out"
+          fi
+          echo "dir=$dest" >> "$GITHUB_OUTPUT"
+      - name: Scan working tree for secrets
+        env:
+          # renovate: datasource=docker
+          GITLEAKS_IMAGE: ghcr.io/gitleaks/gitleaks:v8.21.2
+        run: |
+          docker run --rm \
+            -v "$PWD:/repo:ro" \
+            -v "${{ steps.glcfg.outputs.dir }}:/gitleaks-config:ro" \
+            "$GITLEAKS_IMAGE" \
+            detect --no-git --source=/repo --config=/gitleaks-config/.gitleaks.toml \
+            --no-banner --redact --exit-code=1
 
   semgrep:
     if: ${{ inputs.semgrep }}
@@ -76,4 +115,7 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - name: Lint workflows
-        run: docker run --rm -v "$PWD:/repo" -w /repo rhysd/actionlint:1.7.7 -color
+        env:
+          # renovate: datasource=docker
+          ACTIONLINT_IMAGE: rhysd/actionlint:1.7.7
+        run: docker run --rm -v "$PWD:/repo:ro" -w /repo "$ACTIONLINT_IMAGE" -color

@@ -1,0 +1,14 @@
+{
+  "$schema": "https://docs.renovatebot.com/renovate-schema.json",
+  "extends": ["config:recommended"],
+  "customManagers": [
+    {
+      "customType": "regex",
+      "description": "Bump scanner container images pinned for 'docker run' in the reusable security workflow (annotated with a renovate comment). Semgrep's container: image is picked up natively by the github-actions manager.",
+      "managerFilePatterns": ["/^\\.github/workflows/security\\.yml$/"],
+      "matchStrings": [
+        "# renovate: datasource=(?<datasource>\\S+)\\s+\\w+: (?<depName>\\S+?):(?<currentValue>\\S+)"
+      ]
+    }
+  ]
+}
