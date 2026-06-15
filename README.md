@@ -19,7 +19,21 @@ need:
 Aikido's single free seat covers `lavasec-infra` (highest-risk app logic; CodeQL
 isn't free on private repos), so the free scanners above backstop the other repos.
 
-### Calling it from a repo
+### How repos use it today (Free plan)
+
+GitHub **Free does not allow private repos to call a reusable workflow in another
+private repo** (that needs GitHub Team), and making this repo public would expose
+the org's structure pre-launch. So for now **each repo carries a self-contained
+copy** of `security.yml` with only the scanner jobs it needs — works on Free,
+stays 100% private, and keeps every repo self-contained (more split-resilient).
+
+This file is the **canonical template**: keep the per-repo copies in sync with it.
+No secrets are required — every scanner runs on free, public, no-auth tooling.
+
+### Later: consolidate to a true reusable workflow
+
+Once the org is on **GitHub Team**, or once the consuming repos are **public**,
+replace each repo's copy with a one-line caller and this becomes the single source:
 
 ```yaml
 # .github/workflows/security.yml
@@ -34,8 +48,6 @@ jobs:
       gitleaks: true
       semgrep: true   # only on app-logic repos
 ```
-
-No secrets are required — every scanner runs on free, public, no-auth tooling.
 
 ### Notes
 
