@@ -1,0 +1,79 @@
+name: Security
+
+# Reusable security backstop for the Lava Security org. Each repo calls this with
+# only the scanners it needs (see inputs). Keeping the scanners here — rather than
+# copied into every repo — is exactly what stops the pre-split situation where the
+# monorepo's single security.yml was dropped on the split with no portable home.
+#
+# Caller example (.github/workflows/security.yml in a consuming repo):
+#   on: { push: { branches: [main] }, pull_request: {} }
+#   jobs:
+#     security:
+#       uses: lavasecurity/.github/.github/workflows/security.yml@main
+#       with: { gitleaks: true, semgrep: true }
+
+on:
+  workflow_call:
+    inputs:
+      gitleaks:
+        description: "Secret scan (gitleaks). On for every repo."
+        type: boolean
+        default: true
+      semgrep:
+        description: "SAST for JS/TS (Semgrep OSS). Use on app-logic repos."
+        type: boolean
+        default: false
+      mobsfscan:
+        description: "Mobile SAST (mobsfscan). Use on iOS/Android source repos."
+        type: boolean
+        default: false
+      actionlint:
+        description: "Lint GitHub Actions workflows (actionlint). Use on privileged CI repos."
+        type: boolean
+        default: false
+
+permissions:
+  contents: read
+
+jobs:
+  gitleaks:
+    if: ${{ inputs.gitleaks }}
+    name: gitleaks (secret scan)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Scan working tree for secrets
+        run: |
+          docker run --rm -v "$PWD:/repo" ghcr.io/gitleaks/gitleaks:v8.21.2 \
+            detect --no-git --source=/repo --no-banner --redact --exit-code=1
+
+  semgrep:
+    if: ${{ inputs.semgrep }}
+    name: semgrep (SAST)
+    runs-on: ubuntu-latest
+    container:
+      image: semgrep/semgrep:1.90.0
+    steps:
+      - uses: actions/checkout@v4
+      - name: Semgrep OSS scan
+        run: |
+          semgrep scan --error --metrics off \
+            --config p/typescript --config p/javascript --config p/secrets .
+
+  mobsfscan:
+    if: ${{ inputs.mobsfscan }}
+    name: mobsfscan (mobile SAST)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: mobsfscan
+        run: pipx run mobsfscan --no-fail-safe .
+
+  actionlint:
+    if: ${{ inputs.actionlint }}
+    name: actionlint (workflow lint)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Lint workflows
+        run: docker run --rm -v "$PWD:/repo" -w /repo rhysd/actionlint:1.7.7 -color
