@@ -117,5 +117,5 @@ jobs:
       - name: Lint workflows
         env:
           # renovate: datasource=docker
-          ACTIONLINT_IMAGE: rhysd/actionlint:1.7.7
+          ACTIONLINT_IMAGE: rhysd/actionlint:1.7.12
         run: docker run --rm -v "$PWD:/repo:ro" -w /repo "$ACTIONLINT_IMAGE" -color
