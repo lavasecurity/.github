@@ -41,7 +41,7 @@ jobs:
     name: gitleaks (secret scan)
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
         with:
           # Full history so we can read .gitleaks.toml from the PR's base commit.
           fetch-depth: 0
@@ -101,7 +101,7 @@ jobs:
     container:
       image: semgrep/semgrep:1.90.0
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
       - name: Semgrep OSS scan
         run: |
           semgrep scan --error --metrics off \
@@ -112,7 +112,7 @@ jobs:
     name: mobsfscan (mobile SAST)
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
       - name: mobsfscan
         run: pipx run mobsfscan --no-fail-safe .
 
@@ -121,7 +121,7 @@ jobs:
     name: actionlint (workflow lint)
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
       - name: Lint workflows
         env:
           # renovate: datasource=docker
