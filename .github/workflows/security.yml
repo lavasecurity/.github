@@ -74,16 +74,24 @@ jobs:
             printf '[extend]\nuseDefault = true\n' > "$out"
           fi
           echo "dir=$dest" >> "$GITHUB_OUTPUT"
-      - name: Scan working tree for secrets
+      - name: Scan git history for secrets
         env:
           # renovate: datasource=docker
           GITLEAKS_IMAGE: ghcr.io/gitleaks/gitleaks:v8.30.1
+        # Scan the full commit HISTORY (git mode), not just the checked-out tree. A secret
+        # added in one commit and removed before the final tree still lives in history and is
+        # exposed if/when the repo goes public, so --no-git (directory mode) would miss exactly
+        # the leak this backstop must catch. Requires fetch-depth: 0 above. GIT_CONFIG
+        # safe.directory avoids git's "dubious ownership" error for the host-mounted repo.
         run: |
           docker run --rm \
-            -v "$PWD:/repo:ro" \
+            -v "$PWD:/repo" \
             -v "${{ steps.glcfg.outputs.dir }}:/gitleaks-config:ro" \
+            -e GIT_CONFIG_COUNT=1 \
+            -e GIT_CONFIG_KEY_0=safe.directory \
+            -e GIT_CONFIG_VALUE_0=/repo \
             "$GITLEAKS_IMAGE" \
-            detect --no-git --source=/repo --config=/gitleaks-config/.gitleaks.toml \
+            detect --source=/repo --config=/gitleaks-config/.gitleaks.toml \
             --no-banner --redact --exit-code=1
 
   semgrep:
