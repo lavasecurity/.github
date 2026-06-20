@@ -32,6 +32,23 @@ on:
         type: boolean
         default: false
 
+# Centralised cancellation policy for every caller. A fast-moving PR otherwise stacks
+# up redundant full-history scans — each new commit starts another while the previous
+# is still running. We cancel only superseded *pull_request* runs; push scans (merges
+# to a default branch) must each run to completion because they are the backstop that
+# guarantees nothing lands unscanned.
+#
+# Push runs therefore key the group on github.sha — a unique value per commit — so no
+# two pushes ever share a group. This matters: with cancel-in-progress false GitHub
+# still keeps only ONE pending run per group and cancels any older pending run, so
+# grouping pushes by ref would silently drop an intermediate merge's scan. PR runs key
+# on the PR number so every commit of a PR shares a group and the newer one cancels the
+# older. The github context reflects the CALLER's event, and concurrency groups are
+# namespaced per-repository, so the four callers never collide with one another.
+concurrency:
+  group: security-${{ github.event_name }}-${{ github.event.pull_request.number || github.sha }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
 permissions:
   contents: read
 
