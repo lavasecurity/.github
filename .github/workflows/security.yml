@@ -32,6 +32,17 @@ on:
         type: boolean
         default: false
 
+# Centralised cancellation policy for every caller. A fast-moving PR otherwise stacks
+# up redundant full-history scans — each new commit starts another while the previous
+# is still running. We cancel only superseded *pull_request* runs; push scans (merges
+# to a default branch) must each run to completion because they are the backstop that
+# guarantees nothing lands unscanned, so they queue rather than cancel. The github
+# context here reflects the CALLER's event (ref, event_name), and concurrency groups
+# are namespaced per-repository, so the four callers never collide with one another.
+concurrency:
+  group: security-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
 permissions:
   contents: read
 
