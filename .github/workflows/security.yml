@@ -116,7 +116,7 @@ jobs:
     name: semgrep (SAST)
     runs-on: ubuntu-latest
     container:
-      image: semgrep/semgrep:1.166.0
+      image: semgrep/semgrep:1.168.0
     steps:
       - uses: actions/checkout@v6
       - name: Semgrep OSS scan
