@@ -33,7 +33,7 @@ on:
       llm_model:
         description: "Model id to review with."
         type: string
-        default: "glm-4.6"
+        default: "glm-5.2"
       use_anthropic:
         description: "Speak the Anthropic protocol (true for z.ai's /api/anthropic endpoint)."
         type: boolean
