@@ -71,7 +71,7 @@ jobs:
     name: gitleaks (secret scan)
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@v7
         with:
           # Full history so we can read .gitleaks.toml from the PR's base commit.
           fetch-depth: 0
@@ -131,7 +131,7 @@ jobs:
     container:
       image: semgrep/semgrep:1.166.0
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@v7
       - name: Semgrep OSS scan
         run: |
           semgrep scan --error --metrics off \
@@ -145,7 +145,7 @@ jobs:
       contents: read
       security-events: write
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@v7
       - name: Set up Python
         uses: actions/setup-python@v6
         with:
@@ -187,7 +187,7 @@ jobs:
     name: actionlint (workflow lint)
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@v7
       - name: Lint workflows
         env:
           # renovate: datasource=docker
