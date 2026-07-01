@@ -5,8 +5,11 @@ name: Code Review
 # here once and each repo calls it with only its API-key secret rather than
 # copying the whole pipeline into every repo.
 #
-# PUBLIC REPOS ONLY: the job self-disables on any private repo (see the job
-# `if:`), so wiring this into a private caller is a safe no-op.
+# Runs on public and private repos. Auto-review vs on-demand is controlled by each
+# CALLER's triggers, not here: public repos call this on `pull_request` (auto) plus
+# `issue_comment`; private repos call it on `issue_comment` only, so it stays suspended
+# until someone tags /open-code-review on a PR (no per-PR Actions cost). The security
+# guards below (same-repo heads, trusted commenters) are independent of visibility.
 #
 # Caller example (.github/workflows/code-review.yml in a consuming repo):
 #   on:
@@ -60,14 +63,16 @@ permissions:
 jobs:
   code-review:
     runs-on: ubuntu-latest
-    # Runs only on public repos, and only for:
+    # Runs for:
     #   * a same-repo PR (fork heads never receive the secret, so they'd fail
     #     the config/review/post steps on an empty token — skip them cleanly), or
     #   * an explicit /open-code-review (or @open-code-review) comment on a PR
     #     from a trusted user (OWNER/MEMBER/COLLABORATOR) so arbitrary commenters
     #     can't spend the API key.
+    # No visibility gate here: public vs private is governed by the caller's triggers
+    # (private callers use issue_comment only, so they run only when tagged). The
+    # same-repo and trusted-commenter guards below are the security-relevant ones.
     if: >-
-      !github.event.repository.private &&
       ( ( github.event_name == 'pull_request' &&
           github.event.pull_request.head.repo.full_name == github.repository ) ||
         ( github.event_name == 'issue_comment' &&
