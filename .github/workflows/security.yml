@@ -11,6 +11,15 @@ name: Security
 #     security:
 #       uses: lavasecurity/.github/.github/workflows/security.yml@main
 #       with: { gitleaks: true, semgrep: true }
+#
+# Mobile callers that want mobsfscan findings in code scanning must ALSO grant the token
+# security-events: write on the calling job — a reusable workflow cannot elevate beyond the
+# permissions the caller passes, so without this the SARIF upload 403s on public repos:
+#   jobs:
+#     security:
+#       permissions: { contents: read, security-events: write }
+#       uses: lavasecurity/.github/.github/workflows/security.yml@main
+#       with: { gitleaks: true, mobsfscan: true }
 
 on:
   workflow_call:
@@ -28,7 +37,7 @@ on:
         type: boolean
         default: false
       mobsfscan_sarif:
-        description: "Upload mobsfscan findings to GitHub code scanning (SARIF). Only takes effect when mobsfscan is also true. Auto-skips on private repos (code scanning needs GitHub Advanced Security) and on fork PRs (read-only token), so it is a safe default for every mobile caller."
+        description: "Upload mobsfscan findings to GitHub code scanning (SARIF). Only takes effect when mobsfscan is also true. Auto-skips on private repos (code scanning needs GitHub Advanced Security) and on fork PRs (read-only token), so it is a safe default for every mobile caller. The calling job must grant security-events: write (a reusable workflow cannot elevate beyond the caller's token)."
         type: boolean
         default: true
       actionlint:
@@ -143,13 +152,16 @@ jobs:
           python-version: '3.12'
       - name: Run mobsfscan
         # mobile-specific static analysis (insecure storage, weak crypto, ATS, etc.).
-        # Report to the Security tab rather than gate CI for now — `|| true` keeps a
-        # finding from failing the build while the ruleset beds in. Promote to a
-        # required check once the signal is trusted.
+        # --no-fail reports findings (written to the SARIF below) without failing the build
+        # while the ruleset beds in, but a genuine scanner error (bad args, crash) still
+        # exits non-zero and fails the job. This is deliberately NOT a blanket `|| true`,
+        # which would mask a broken scan as a green no-op — most dangerously on private
+        # repos, where the SARIF upload step is skipped and this run is the only signal.
+        # Promote findings to a required gate (drop --no-fail) once the signal is trusted.
         run: |
           python -m pip install --upgrade pip
           pip install mobsfscan
-          mobsfscan --sarif --output mobsfscan.sarif . || true
+          mobsfscan --no-fail --sarif --output mobsfscan.sarif .
       - name: Upload SARIF to code scanning
         # Preserves the capability the vendored iOS security.yml copies carried before
         # they converged onto this reusable workflow. Skip on fork pull requests: their
@@ -157,6 +169,9 @@ jobs:
         # skip on private repos (e.g. the internal mirrors): code scanning needs GitHub
         # Advanced Security there, so upload-sarif 403s ("Resource not accessible by
         # integration") and would fail the job. Public repos get code scanning for free.
+        # NOTE: the calling job must grant security-events: write — a reusable workflow
+        # cannot elevate beyond the caller's token, so on a least-privilege caller this
+        # upload would 403 without it (see the caller example in the header).
         if: ${{ always() && inputs.mobsfscan_sarif && (github.event_name != 'pull_request' || github.event.pull_request.head.repo.fork == false) && github.event.repository.visibility == 'public' }}
         uses: github/codeql-action/upload-sarif@v4
         with:
