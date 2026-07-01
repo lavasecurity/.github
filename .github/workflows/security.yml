@@ -149,7 +149,7 @@ jobs:
       - name: Set up Python
         uses: actions/setup-python@v6
         with:
-          python-version: '3.12'
+          python-version: '3.14'
       - name: Run mobsfscan
         # mobile-specific static analysis (insecure storage, weak crypto, ATS, etc.).
         # --no-fail reports findings without failing the build while the ruleset beds in, but a
