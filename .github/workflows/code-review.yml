@@ -1,0 +1,512 @@
+name: Code Review
+
+# Reusable AI code-review backstop for the Lava Security org, powered by
+# alibaba/open-code-review (OCR). Like the security workflow, the logic lives
+# here once and each repo calls it with only its API-key secret rather than
+# copying the whole pipeline into every repo.
+#
+# PUBLIC REPOS ONLY: the job self-disables on any private repo (see the job
+# `if:`), so wiring this into a private caller is a safe no-op.
+#
+# Caller example (.github/workflows/code-review.yml in a consuming repo):
+#   on:
+#     pull_request:
+#       types: [opened, synchronize, reopened]
+#     issue_comment:
+#       types: [created]
+#   jobs:
+#     code-review:
+#       permissions:
+#         contents: read
+#         pull-requests: write
+#       uses: lavasecurity/.github/.github/workflows/code-review.yml@main
+#       secrets:
+#         llm_auth_token: ${{ secrets.OCR_LLM_AUTH_TOKEN }}
+
+on:
+  workflow_call:
+    inputs:
+      llm_url:
+        description: "LLM endpoint. Defaults to z.ai's Anthropic-compatible API."
+        type: string
+        default: "https://api.z.ai/api/anthropic"
+      llm_model:
+        description: "Model id to review with."
+        type: string
+        default: "glm-4.6"
+      use_anthropic:
+        description: "Speak the Anthropic protocol (true for z.ai's /api/anthropic endpoint)."
+        type: boolean
+        default: true
+      ocr_version:
+        description: "Pin @alibaba-group/open-code-review to a version. Empty = latest."
+        type: string
+        default: ""
+    secrets:
+      llm_auth_token:
+        description: "API key for the LLM endpoint (e.g. your z.ai key)."
+        required: true
+
+# One review per PR; a new push cancels the superseded run so rapid pushes don't
+# stack full reviews (and burn API quota).
+concurrency:
+  group: code-review-${{ github.event.pull_request.number || github.event.issue.number || github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+  pull-requests: write
+
+jobs:
+  code-review:
+    runs-on: ubuntu-latest
+    # Public repos only, and only for PRs or an explicit /open-code-review (or
+    # @open-code-review) comment on a PR.
+    if: >-
+      !github.event.repository.private &&
+      ( github.event_name == 'pull_request' ||
+        ( github.event_name == 'issue_comment' &&
+          github.event.issue.pull_request &&
+          ( startsWith(github.event.comment.body, '/open-code-review') ||
+            startsWith(github.event.comment.body, '@open-code-review') ) ) )
+    steps:
+      # For comment-triggered runs there is no pull_request in the payload, so
+      # resolve the PR's base/head from the API.
+      - name: Get PR context
+        id: pr-context
+        if: github.event_name == 'issue_comment'
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const prNumber = context.issue.number;
+            const { data: pullRequest } = await github.rest.pulls.get({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              pull_number: prNumber
+            });
+            core.setOutput('base_ref', pullRequest.base.ref);
+            core.setOutput('head_ref', pullRequest.head.ref);
+            core.setOutput('head_sha', pullRequest.head.sha);
+
+      - name: Checkout repository
+        uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
+          ref: ${{ github.event.pull_request.head.sha || steps.pr-context.outputs.head_sha }}
+
+      - name: Fetch PR head ref
+        run: git fetch origin "pull/${{ github.event.pull_request.number || github.event.issue.number }}/head"
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '24'
+
+      - name: Install OpenCodeReview
+        env:
+          OCR_VERSION: ${{ inputs.ocr_version }}
+        run: |
+          if [ -n "$OCR_VERSION" ]; then
+            npm install -g "@alibaba-group/open-code-review@${OCR_VERSION}"
+          else
+            npm install -g @alibaba-group/open-code-review
+          fi
+          echo "OpenCodeReview installed with version:"
+          ocr version || true
+
+      - name: Configure OCR
+        env:
+          OCR_LLM_URL: ${{ inputs.llm_url }}
+          OCR_LLM_MODEL: ${{ inputs.llm_model }}
+          OCR_USE_ANTHROPIC: ${{ inputs.use_anthropic }}
+          OCR_LLM_AUTH_TOKEN: ${{ secrets.llm_auth_token }}
+        run: |
+          ocr config set llm.url "$OCR_LLM_URL"
+          ocr config set llm.auth_token "$OCR_LLM_AUTH_TOKEN"
+          ocr config set llm.model "$OCR_LLM_MODEL"
+          ocr config set llm.use_anthropic "$OCR_USE_ANTHROPIC"
+          ocr config set llm.extra_body '{"thinking": {"type": "disabled"}}'
+
+      - name: Run OpenCodeReview
+        id: review
+        # Values come from the event payload (branch names can contain shell
+        # metacharacters), so route them through env rather than inline ${{ }}.
+        env:
+          EVENT_NAME: ${{ github.event_name }}
+          PR_BASE_REF: ${{ github.event.pull_request.base.ref }}
+          PR_HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+          CTX_BASE_REF: ${{ steps.pr-context.outputs.base_ref }}
+          CTX_HEAD_SHA: ${{ steps.pr-context.outputs.head_sha }}
+        run: |
+          if [ "$EVENT_NAME" = "pull_request" ]; then
+            BASE_REF="$PR_BASE_REF"
+            HEAD_SHA="$PR_HEAD_SHA"
+          else
+            BASE_REF="$CTX_BASE_REF"
+            HEAD_SHA="$CTX_HEAD_SHA"
+          fi
+          echo "Reviewing ${HEAD_SHA} against origin/${BASE_REF}"
+          ocr review \
+            --from "origin/${BASE_REF}" \
+            --to "${HEAD_SHA}" \
+            --format json \
+            > /tmp/ocr-result.json 2>/tmp/ocr-stderr.log || true
+          echo "=== OCR output ==="
+          cat /tmp/ocr-result.json
+          echo "=== OCR stderr ==="
+          cat /tmp/ocr-stderr.log
+
+      - name: Post review comments to PR
+        uses: actions/github-script@v7
+        with:
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+          script: |
+            const fs = require('fs');
+            const path = '/tmp/ocr-result.json';
+
+            let result;
+            try {
+              const raw = fs.readFileSync(path, 'utf8');
+              result = JSON.parse(raw);
+            } catch (e) {
+              console.log('Failed to parse OCR output:', e.message);
+              const stderr = fs.readFileSync('/tmp/ocr-stderr.log', 'utf8').trim();
+              if (stderr) {
+                await github.rest.issues.createComment({
+                  owner: context.repo.owner,
+                  repo: context.repo.repo,
+                  issue_number: context.issue.number,
+                  body: `⚠️ **OpenCodeReview** encountered an error:\n${fencedBlock(stderr)}`
+                });
+              }
+              return;
+            }
+
+            const comments = result.comments || [];
+            const warnings = result.warnings || [];
+
+            if (comments.length === 0) {
+              const message = result.message || 'No comments generated. Looks good to me.';
+              await github.rest.issues.createComment({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                issue_number: context.issue.number,
+                body: `✅ **OpenCodeReview**: ${message}`
+              });
+              return;
+            }
+
+            const prNumber = context.issue.number;
+            let commitSha;
+
+            if (context.eventName === 'pull_request') {
+              commitSha = context.payload.pull_request.head.sha;
+            } else {
+              const { data: pullRequest } = await github.rest.pulls.get({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                pull_number: prNumber
+              });
+              commitSha = pullRequest.head.sha;
+            }
+
+            const reviewComments = [];
+            const commentsWithoutLine = [];
+
+            for (const comment of comments) {
+              const body = formatComment(comment);
+
+              const hasValidLine = (comment.start_line >= 1) || (comment.end_line >= 1);
+              if (!hasValidLine) {
+                commentsWithoutLine.push({ comment, body });
+                continue;
+              }
+
+              const reviewComment = {
+                path: comment.path,
+                body: body
+              };
+
+              if (comment.start_line >= 1 && comment.end_line >= 1 && comment.start_line !== comment.end_line) {
+                reviewComment.start_line = comment.start_line;
+                reviewComment.line = comment.end_line;
+                reviewComment.start_side = 'RIGHT';
+                reviewComment.side = 'RIGHT';
+              } else if (comment.end_line >= 1) {
+                reviewComment.line = comment.end_line;
+                reviewComment.side = 'RIGHT';
+              } else if (comment.start_line >= 1) {
+                reviewComment.line = comment.start_line;
+                reviewComment.side = 'RIGHT';
+              }
+
+              reviewComments.push({ comment, reviewComment });
+            }
+
+            const totalCount = comments.length;
+            const inlineCount = reviewComments.length;
+            const summaryCount = commentsWithoutLine.length;
+            let summaryBody = buildSummaryBody(totalCount, inlineCount, summaryCount, warnings);
+
+            summaryBody += formatSummaryComments(commentsWithoutLine);
+
+            let successCount = 0;
+            let failedCount = 0;
+            const failedComments = [];
+
+            try {
+              const batchRes = await github.rest.pulls.createReview({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                pull_number: prNumber,
+                commit_id: commitSha,
+                body: summaryBody,
+                event: 'COMMENT',
+                comments: reviewComments.map(({ reviewComment }) => reviewComment)
+              });
+              successCount = reviewComments.length;
+              console.log(`Successfully posted review with ${successCount} inline comments (${commentsWithoutLine.length} in summary)`);
+              logRateLimitQuota(batchRes, 'after batch createReview');
+            } catch (e) {
+              console.log('Failed to post review with inline comments:', e.message);
+              console.log('Falling back to posting comments individually with rate-limit-aware retry...');
+
+              const MAX_RETRIES = parseInt(process.env.OCR_MAX_RETRIES, 10) || 3;
+              const SUCCESS_DELAY = parseInt(process.env.OCR_SUCCESS_DELAY, 10) || 2000;
+              const FAILURE_DELAY = parseInt(process.env.OCR_FAILURE_DELAY, 10) || 1000;
+              const LOW_REMAINING_THRESHOLD = parseInt(process.env.OCR_LOW_REMAINING_THRESHOLD, 10) || 3;
+              const LOW_REMAINING_SPACING = parseInt(process.env.OCR_LOW_REMAINING_SPACING, 10) || 10000;
+
+              const batchRetry = computeRetryDelayMs(e, 0);
+              if (batchRetry != null) {
+                const secs = (batchRetry.delayMs / 1000).toFixed(1);
+                console.log(
+                  `Batch createReview was rate-limited (HTTP ${e.status}). ` +
+                  `Cooling down ${secs}s via '${batchRetry.source}' (${batchRetry.detail}) before per-comment retry.`
+                );
+                await sleep(batchRetry.delayMs);
+              }
+
+              for (const { comment, reviewComment } of reviewComments) {
+                let posted = false;
+                for (let attempt = 0; attempt <= MAX_RETRIES && !posted; attempt++) {
+                  try {
+                    const res = await github.rest.pulls.createReview({
+                      owner: context.repo.owner,
+                      repo: context.repo.repo,
+                      pull_number: prNumber,
+                      commit_id: commitSha,
+                      body: '',
+                      event: 'COMMENT',
+                      comments: [reviewComment]
+                    });
+                    successCount++;
+                    posted = true;
+                    console.log(`Successfully posted comment for ${reviewComment.path}`);
+                    const remaining = logRateLimitQuota(res, `after ${reviewComment.path}`);
+                    const lowQuota = remaining != null && remaining <= LOW_REMAINING_THRESHOLD;
+                    if (lowQuota) {
+                      console.log(`[rate-limit] quota low (remaining=${remaining} <= ${LOW_REMAINING_THRESHOLD}); increasing spacing to ${LOW_REMAINING_SPACING}ms.`);
+                      await sleep(LOW_REMAINING_SPACING);
+                    } else {
+                      await sleep(SUCCESS_DELAY);
+                    }
+                  } catch (innerE) {
+                    const retryInfo = computeRetryDelayMs(innerE, attempt);
+                    const willRetry = retryInfo != null && attempt < MAX_RETRIES;
+                    if (willRetry) {
+                      const secs = (retryInfo.delayMs / 1000).toFixed(1);
+                      console.log(
+                        `Rate-limited/transient error on ${reviewComment.path} ` +
+                        `(HTTP ${innerE.status}, attempt ${attempt + 1}/${MAX_RETRIES}). ` +
+                        `Waiting ${secs}s via '${retryInfo.source}' (${retryInfo.detail}). ` +
+                        `Error: ${innerE.message}`
+                      );
+                      await sleep(retryInfo.delayMs);
+                    } else {
+                      failedCount++;
+                      failedComments.push({ comment, error: innerE.message });
+                      const reason = retryInfo == null ? 'non-retryable error' : 'rate-limit retries exhausted';
+                      console.log(`Failed to post comment for ${reviewComment.path} (${reason}, HTTP ${innerE.status || 'n/a'}): ${innerE.message}`);
+                      await sleep(retryInfo == null ? FAILURE_DELAY : SUCCESS_DELAY);
+                      break;
+                    }
+                  }
+                }
+              }
+
+              let finalBody = buildSummaryBody(totalCount, successCount, commentsWithoutLine.length + failedComments.length, warnings);
+              finalBody += formatSummaryComments(commentsWithoutLine);
+              finalBody += `\n\n---\n\n📊 **Posting Statistics:**`;
+              finalBody += `\n- ✅ Successfully posted: ${successCount} comment(s)`;
+              if (failedCount > 0) {
+                finalBody += `\n- ❌ Failed to post: ${failedCount} comment(s)`;
+              }
+
+              if (failedComments.length > 0) {
+                finalBody += '\n\n---\n\n### ⚠️ Inline comments shown in summary';
+                for (const { comment, error } of failedComments) {
+                  finalBody += '\n\n---\n\n';
+                  finalBody += formatCommentMarkdown(comment, error);
+                }
+              }
+
+              await github.rest.issues.createComment({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                issue_number: prNumber,
+                body: finalBody
+              });
+            }
+
+            function sleep(ms) {
+              return new Promise(resolve => setTimeout(resolve, ms));
+            }
+
+            function getHeader(headers, name) {
+              const v = headers[name] != null ? headers[name] : headers[name.toLowerCase()];
+              return v != null ? String(v).trim() : undefined;
+            }
+
+            function computeRetryDelayMs(error, attempt) {
+              if (!error) return null;
+              const status = error.status;
+              const message = String(error.message || '');
+              const isRateLimit = status === 429 || (status === 403 && /rate limit|abuse|secondary/i.test(message));
+              const isTransient = (status >= 500 && status < 600) || status === 408;
+              if (!isRateLimit && !isTransient) return null;
+
+              const headers = ((error.response || {}).headers) || {};
+              const header = (name) => getHeader(headers, name);
+              const nowSec = Math.floor(Date.now() / 1000);
+
+              const cap = parseInt(process.env.OCR_RETRY_MAX_DELAY, 10) || 300000;
+              const base = parseInt(process.env.OCR_RETRY_BASE_DELAY, 10) || 60000;
+
+              let info = null;
+
+              if (isRateLimit) {
+                const retryAfter = header('retry-after');
+                if (retryAfter) {
+                  const secs = Number(retryAfter);
+                  if (!isNaN(secs) && secs >= 0) {
+                    info = { rawMs: secs * 1000, source: 'retry-after', detail: `${secs}s (from header)` };
+                  } else {
+                    const dateMs = Date.parse(retryAfter);
+                    if (!isNaN(dateMs)) {
+                      info = { rawMs: Math.max(0, dateMs - Date.now()), source: 'retry-after (HTTP-date)', detail: retryAfter };
+                    }
+                  }
+                }
+
+                if (!info) {
+                  const remaining = header('x-ratelimit-remaining');
+                  const reset = header('x-ratelimit-reset');
+                  if (reset != null && Number(remaining) === 0) {
+                    const rawMs = Math.max(0, Number(reset) - nowSec) * 1000;
+                    info = { rawMs, source: 'x-ratelimit-reset', detail: `remaining=0, reset epoch=${reset} (in ${Math.ceil(rawMs / 1000)}s)` };
+                  }
+                }
+
+                if (!info) {
+                  const backoff = Math.min(base * Math.pow(2, attempt), cap);
+                  const jitter = Math.floor(Math.random() * 1000);
+                  info = { rawMs: backoff + jitter, source: 'exponential-backoff', detail: `base=${base}ms*2^${attempt} (cap ${cap}ms) +${jitter}ms jitter` };
+                }
+              } else {
+                const transientBase = 2000;
+                const backoff = Math.min(transientBase * Math.pow(2, attempt), cap);
+                const jitter = Math.floor(Math.random() * 1000);
+                info = { rawMs: backoff + jitter, source: 'transient-backoff', detail: `base=${transientBase}ms*2^${attempt} (cap ${cap}ms) +${jitter}ms jitter (HTTP ${status})` };
+              }
+
+              const delayMs = Math.min(info.rawMs, cap);
+              if (delayMs < info.rawMs) {
+                info.detail += ` [CAPPED to ${cap}ms; GitHub recommended ${Math.ceil(info.rawMs / 1000)}s]`;
+              }
+              return { delayMs, source: info.source, detail: info.detail };
+            }
+
+            function logRateLimitQuota(response, tag) {
+              try {
+                const h = (response && response.headers) || {};
+                const header = (name) => getHeader(h, name);
+                const remaining = header('x-ratelimit-remaining');
+                const limit = header('x-ratelimit-limit');
+                const reset = header('x-ratelimit-reset');
+                if (remaining != null) {
+                  console.log(
+                    `[rate-limit] ${tag}: remaining=${remaining}/${limit != null ? limit : '?'}` +
+                    (reset != null ? `, reset epoch=${reset}` : '')
+                  );
+                }
+                return remaining != null ? Number(remaining) : null;
+              } catch (_) { return null; }
+            }
+
+            function formatComment(comment) {
+              let body = comment.content || '';
+
+              if (comment.suggestion_code && comment.existing_code) {
+                body += '\n\n**Suggestion:**\n';
+                body += fencedBlock(comment.suggestion_code, 'suggestion');
+              }
+
+              return body;
+            }
+
+            function formatCommentMarkdown(comment, error) {
+              let md = `### 📄 \`${comment.path}\``;
+              if (comment.start_line && comment.end_line) {
+                md += ` (L${comment.start_line}-L${comment.end_line})`;
+              }
+              md += '\n\n';
+              if (error) {
+                md += `⚠️ GitHub could not post this as an inline comment: ${error}\n\n`;
+              }
+              md += comment.content || '';
+
+              if (comment.suggestion_code && comment.existing_code) {
+                md += '\n\n<details><summary>💡 Suggested Change</summary>\n\n';
+                md += '**Before:**\n' + fencedBlock(comment.existing_code) + '\n\n';
+                md += '**After:**\n' + fencedBlock(comment.suggestion_code) + '\n\n';
+                md += '</details>';
+              }
+
+              return md;
+            }
+
+            function buildSummaryBody(totalCount, inlineCount, summaryCount, warnings) {
+              let body = `🔍 **OpenCodeReview** found **${totalCount}** issue(s) in this PR.`;
+              if (totalCount > 0) {
+                body += `\n- ✅ ${inlineCount} posted as inline comment(s)`;
+                body += `\n- 📝 ${summaryCount} posted as summary`;
+              }
+              if (warnings.length > 0) {
+                body += `\n\n⚠️ ${warnings.length} warning(s) occurred during review.`;
+              }
+              return body;
+            }
+
+            function formatSummaryComments(summaryComments) {
+              let body = '';
+              for (const { comment } of summaryComments) {
+                body += '\n\n---\n\n';
+                body += formatCommentMarkdown(comment);
+              }
+              return body;
+            }
+
+            function fencedBlock(content, language = '') {
+              const text = String(content || '');
+              const fence = safeFence(text);
+              let block = fence + language + '\n' + text;
+              if (!text.endsWith('\n')) block += '\n';
+              return block + fence;
+            }
+
+            function safeFence(content) {
+              const matches = String(content || '').match(/`+/g) || [];
+              const maxTicks = matches.reduce((max, ticks) => Math.max(max, ticks.length), 0);
+              return '`'.repeat(Math.max(3, maxTicks + 1));
+            }
