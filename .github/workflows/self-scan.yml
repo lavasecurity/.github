@@ -1,0 +1,19 @@
+name: Security
+
+# lavasecurity/.github is itself a privileged CI repo — it hosts the org's reusable
+# workflows, so a bad edit here affects every consuming repo. It therefore runs the same
+# backstop on its own history (gitleaks) and lints its own workflow YAML (actionlint) by
+# calling its own reusable security.yml. This is a normal caller: the reusable workflow
+# only triggers on workflow_call, so there is no recursion. Works private->private today
+# and continues to work once this repo is public.
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  security:
+    uses: lavasecurity/.github/.github/workflows/security.yml@main
+    with:
+      gitleaks: true
+      actionlint: true

@@ -27,6 +27,10 @@ on:
         description: "Mobile SAST (mobsfscan). Use on iOS/Android source repos."
         type: boolean
         default: false
+      mobsfscan_sarif:
+        description: "Upload mobsfscan findings to GitHub code scanning (SARIF). Only takes effect when mobsfscan is also true. Auto-skips on private repos (code scanning needs GitHub Advanced Security) and on fork PRs (read-only token), so it is a safe default for every mobile caller."
+        type: boolean
+        default: true
       actionlint:
         description: "Lint GitHub Actions workflows (actionlint). Use on privileged CI repos."
         type: boolean
@@ -128,10 +132,36 @@ jobs:
     if: ${{ inputs.mobsfscan }}
     name: mobsfscan (mobile SAST)
     runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      security-events: write
     steps:
       - uses: actions/checkout@v6
-      - name: mobsfscan
-        run: pipx run mobsfscan --no-fail-safe .
+      - name: Set up Python
+        uses: actions/setup-python@v6
+        with:
+          python-version: '3.12'
+      - name: Run mobsfscan
+        # mobile-specific static analysis (insecure storage, weak crypto, ATS, etc.).
+        # Report to the Security tab rather than gate CI for now — `|| true` keeps a
+        # finding from failing the build while the ruleset beds in. Promote to a
+        # required check once the signal is trusted.
+        run: |
+          python -m pip install --upgrade pip
+          pip install mobsfscan
+          mobsfscan --sarif --output mobsfscan.sarif . || true
+      - name: Upload SARIF to code scanning
+        # Preserves the capability the vendored iOS security.yml copies carried before
+        # they converged onto this reusable workflow. Skip on fork pull requests: their
+        # read-only token cannot write security events, so the upload would error. Also
+        # skip on private repos (e.g. the internal mirrors): code scanning needs GitHub
+        # Advanced Security there, so upload-sarif 403s ("Resource not accessible by
+        # integration") and would fail the job. Public repos get code scanning for free.
+        if: ${{ always() && inputs.mobsfscan_sarif && (github.event_name != 'pull_request' || github.event.pull_request.head.repo.fork == false) && github.event.repository.visibility == 'public' }}
+        uses: github/codeql-action/upload-sarif@v4
+        with:
+          sarif_file: mobsfscan.sarif
+          category: mobsfscan
 
   actionlint:
     if: ${{ inputs.actionlint }}
