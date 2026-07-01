@@ -62,14 +62,22 @@ concurrency:
   group: security-${{ github.event_name }}-${{ github.event.pull_request.number || github.sha }}
   cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
-permissions:
-  contents: read
+# No workflow-level permissions block on purpose. A reusable workflow's requested
+# permissions are validated against the CALLER's granted token at startup — before any
+# `if:` can skip a job — so declaring a scope here (or on a job) that some caller does not
+# grant fails the ENTIRE run with a startup_failure, even for the jobs that caller does use.
+# Each job below requests only contents: read at the job level (within every caller's grant).
+# The mobsfscan job deliberately declares NO permissions so it inherits the caller's token:
+# a mobile caller that grants security-events: write can then upload SARIF, without forcing
+# every non-mobile caller (gitleaks/semgrep/actionlint-only) to grant that scope.
 
 jobs:
   gitleaks:
     if: ${{ inputs.gitleaks }}
     name: gitleaks (secret scan)
     runs-on: ubuntu-latest
+    permissions:
+      contents: read
     steps:
       - uses: actions/checkout@v6
         with:
@@ -128,6 +136,8 @@ jobs:
     if: ${{ inputs.semgrep }}
     name: semgrep (SAST)
     runs-on: ubuntu-latest
+    permissions:
+      contents: read
     container:
       image: semgrep/semgrep:1.166.0
     steps:
@@ -141,9 +151,11 @@ jobs:
     if: ${{ inputs.mobsfscan }}
     name: mobsfscan (mobile SAST)
     runs-on: ubuntu-latest
-    permissions:
-      contents: read
-      security-events: write
+    # No permissions block on purpose: this job inherits the CALLER's token. A mobile caller
+    # that grants security-events: write (see the header example) thereby enables the SARIF
+    # upload step below. Declaring security-events: write here instead would force EVERY
+    # caller — including gitleaks/semgrep/actionlint-only ones — to grant it or hit a
+    # startup_failure, because reusable-workflow permissions are validated before `if:` runs.
     steps:
       - uses: actions/checkout@v6
       - name: Set up Python
@@ -186,6 +198,8 @@ jobs:
     if: ${{ inputs.actionlint }}
     name: actionlint (workflow lint)
     runs-on: ubuntu-latest
+    permissions:
+      contents: read
     steps:
       - uses: actions/checkout@v6
       - name: Lint workflows
