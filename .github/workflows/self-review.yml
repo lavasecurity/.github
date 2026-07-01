@@ -1,0 +1,22 @@
+name: Code Review
+
+# lavasecurity/.github reviews its own pull requests with the reusable AI code-review
+# workflow it hosts. Named self-review.yml because code-review.yml is the reusable
+# workflow itself. References @main — a normal caller of a same-repo reusable workflow;
+# the reusable only triggers on workflow_call, so there is no recursion. This repo is
+# public, so the reusable's public-only guard passes. Requires the repo secret
+# OCR_LLM_AUTH_TOKEN (the z.ai API key).
+on:
+  pull_request:
+    types: [opened, synchronize, reopened]
+  issue_comment:
+    types: [created]
+
+jobs:
+  code-review:
+    permissions:
+      contents: read
+      pull-requests: write
+    uses: lavasecurity/.github/.github/workflows/code-review.yml@main
+    secrets:
+      llm_auth_token: ${{ secrets.OCR_LLM_AUTH_TOKEN }}
