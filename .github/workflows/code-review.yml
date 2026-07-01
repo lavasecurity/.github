@@ -60,15 +60,23 @@ permissions:
 jobs:
   code-review:
     runs-on: ubuntu-latest
-    # Public repos only, and only for PRs or an explicit /open-code-review (or
-    # @open-code-review) comment on a PR.
+    # Runs only on public repos, and only for:
+    #   * a same-repo PR (fork heads never receive the secret, so they'd fail
+    #     the config/review/post steps on an empty token — skip them cleanly), or
+    #   * an explicit /open-code-review (or @open-code-review) comment on a PR
+    #     from a trusted user (OWNER/MEMBER/COLLABORATOR) so arbitrary commenters
+    #     can't spend the API key.
     if: >-
       !github.event.repository.private &&
-      ( github.event_name == 'pull_request' ||
+      ( ( github.event_name == 'pull_request' &&
+          github.event.pull_request.head.repo.full_name == github.repository ) ||
         ( github.event_name == 'issue_comment' &&
           github.event.issue.pull_request &&
           ( startsWith(github.event.comment.body, '/open-code-review') ||
-            startsWith(github.event.comment.body, '@open-code-review') ) ) )
+            startsWith(github.event.comment.body, '@open-code-review') ) &&
+          ( github.event.comment.author_association == 'OWNER' ||
+            github.event.comment.author_association == 'MEMBER' ||
+            github.event.comment.author_association == 'COLLABORATOR' ) ) )
     steps:
       # For comment-triggered runs there is no pull_request in the payload, so
       # resolve the PR's base/head from the API.
