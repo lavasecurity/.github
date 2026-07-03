@@ -79,7 +79,7 @@ jobs:
     permissions:
       contents: read
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@v7
         with:
           # Full history so we can read .gitleaks.toml from the PR's base commit.
           fetch-depth: 0
@@ -141,7 +141,7 @@ jobs:
     container:
       image: semgrep/semgrep:1.166.0
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@v7
       - name: Semgrep OSS scan
         run: |
           semgrep scan --error --metrics off \
@@ -157,7 +157,7 @@ jobs:
     # caller — including gitleaks/semgrep/actionlint-only ones — to grant it or hit a
     # startup_failure, because reusable-workflow permissions are validated before `if:` runs.
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@v7
       - name: Set up Python
         uses: actions/setup-python@v6
         with:
@@ -201,7 +201,7 @@ jobs:
     permissions:
       contents: read
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@v7
       - name: Lint workflows
         env:
           # renovate: datasource=docker
