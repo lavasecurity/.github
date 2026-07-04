@@ -30,24 +30,24 @@ on:
   workflow_call:
     inputs:
       llm_url:
-        description: "LLM endpoint. Defaults to z.ai's Anthropic-compatible API."
+        description: "LLM endpoint. Defaults to OpenRouter's OpenAI-compatible API."
         type: string
-        default: "https://api.z.ai/api/anthropic"
+        default: "https://openrouter.ai/api/v1"
       llm_model:
-        description: "Model id to review with."
+        description: "Model to review with. Defaults to an OpenRouter preset that holds the model + fallback chain + routing server-side."
         type: string
-        default: "glm-5.2"
+        default: "@preset/lava-code-review"
       use_anthropic:
-        description: "Speak the Anthropic protocol (true for z.ai's /api/anthropic endpoint)."
+        description: "Speak the Anthropic protocol. False for OpenRouter (OpenAI-compatible); true for e.g. z.ai's /api/anthropic endpoint."
         type: boolean
-        default: true
+        default: false
       ocr_version:
         description: "Pin @alibaba-group/open-code-review to a version. Empty = latest."
         type: string
         default: ""
     secrets:
       llm_auth_token:
-        description: "API key for the LLM endpoint (e.g. your z.ai key)."
+        description: "API key for the LLM endpoint (e.g. your OpenRouter key)."
         required: true
 
 # One review per PR; a new push cancels the superseded run so rapid pushes don't
@@ -138,7 +138,6 @@ jobs:
           ocr config set llm.auth_token "$OCR_LLM_AUTH_TOKEN"
           ocr config set llm.model "$OCR_LLM_MODEL"
           ocr config set llm.use_anthropic "$OCR_USE_ANTHROPIC"
-          ocr config set llm.extra_body '{"thinking": {"type": "disabled"}}'
 
       # OCR ranks findings internally (high/medium/low) but never puts that label in the
       # posted comment. Drop an org-default rule into the checked-out caller repo so every
