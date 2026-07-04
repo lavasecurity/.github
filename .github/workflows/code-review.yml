@@ -5,8 +5,11 @@ name: Code Review
 # here once and each repo calls it with only its API-key secret rather than
 # copying the whole pipeline into every repo.
 #
-# PUBLIC REPOS ONLY: the job self-disables on any private repo (see the job
-# `if:`), so wiring this into a private caller is a safe no-op.
+# Runs on public and private repos. Auto-review vs on-demand is controlled by each
+# CALLER's triggers, not here: public repos call this on `pull_request` (auto) plus
+# `issue_comment`; private repos call it on `issue_comment` only, so it stays suspended
+# until someone tags /open-code-review on a PR (no per-PR Actions cost). The security
+# guards below (same-repo heads, trusted commenters) are independent of visibility.
 #
 # Caller example (.github/workflows/code-review.yml in a consuming repo):
 #   on:
@@ -27,30 +30,34 @@ on:
   workflow_call:
     inputs:
       llm_url:
-        description: "LLM endpoint. Defaults to z.ai's Anthropic-compatible API."
+        description: "LLM endpoint. Defaults to OpenRouter's OpenAI-compatible API."
         type: string
-        default: "https://api.z.ai/api/anthropic"
+        default: "https://openrouter.ai/api/v1"
       llm_model:
-        description: "Model id to review with."
+        description: "Model to review with. Defaults to an OpenRouter preset that holds the model + fallback chain + routing server-side."
         type: string
-        default: "glm-5.2"
+        default: "@preset/lava-code-review"
       use_anthropic:
-        description: "Speak the Anthropic protocol (true for z.ai's /api/anthropic endpoint)."
+        description: "Speak the Anthropic protocol. False for OpenRouter (OpenAI-compatible); true for e.g. z.ai's /api/anthropic endpoint."
         type: boolean
-        default: true
+        default: false
       ocr_version:
         description: "Pin @alibaba-group/open-code-review to a version. Empty = latest."
         type: string
         default: ""
     secrets:
       llm_auth_token:
-        description: "API key for the LLM endpoint (e.g. your z.ai key)."
+        description: "API key for the LLM endpoint (e.g. your OpenRouter key)."
         required: true
 
 # One review per PR; a new push cancels the superseded run so rapid pushes don't
-# stack full reviews (and burn API quota).
+# stack full reviews (and burn API quota). The group key includes the event name so
+# comment-triggered runs (issue_comment) sit in a separate group from push-triggered
+# reviews (pull_request): otherwise any PR comment — another bot's review summary, or a
+# /command aimed at a different tool — enters the shared group and cancels the in-flight
+# review before skipping itself on the trigger guard below.
 concurrency:
-  group: code-review-${{ github.event.pull_request.number || github.event.issue.number || github.ref }}
+  group: code-review-${{ github.event.pull_request.number || github.event.issue.number || github.ref }}-${{ github.event_name }}
   cancel-in-progress: true
 
 permissions:
@@ -60,14 +67,16 @@ permissions:
 jobs:
   code-review:
     runs-on: ubuntu-latest
-    # Runs only on public repos, and only for:
+    # Runs for:
     #   * a same-repo PR (fork heads never receive the secret, so they'd fail
     #     the config/review/post steps on an empty token — skip them cleanly), or
     #   * an explicit /open-code-review (or @open-code-review) comment on a PR
     #     from a trusted user (OWNER/MEMBER/COLLABORATOR) so arbitrary commenters
     #     can't spend the API key.
+    # No visibility gate here: public vs private is governed by the caller's triggers
+    # (private callers use issue_comment only, so they run only when tagged). The
+    # same-repo and trusted-commenter guards below are the security-relevant ones.
     if: >-
-      !github.event.repository.private &&
       ( ( github.event_name == 'pull_request' &&
           github.event.pull_request.head.repo.full_name == github.repository ) ||
         ( github.event_name == 'issue_comment' &&
@@ -97,7 +106,7 @@ jobs:
             core.setOutput('head_sha', pullRequest.head.sha);
 
       - name: Checkout repository
-        uses: actions/checkout@v6
+        uses: actions/checkout@v7
         with:
           fetch-depth: 0
           ref: ${{ github.event.pull_request.head.sha || steps.pr-context.outputs.head_sha }}
@@ -133,7 +142,35 @@ jobs:
           ocr config set llm.auth_token "$OCR_LLM_AUTH_TOKEN"
           ocr config set llm.model "$OCR_LLM_MODEL"
           ocr config set llm.use_anthropic "$OCR_USE_ANTHROPIC"
-          ocr config set llm.extra_body '{"thinking": {"type": "disabled"}}'
+
+      # OCR ranks findings internally (high/medium/low) but never puts that label in the
+      # posted comment. Drop an org-default rule into the checked-out caller repo so every
+      # finding is prefixed with a [P1]/[P2]/[P3] severity tag (which the post step renders
+      # verbatim from `content`) AND the reviewer stays focused on functional issues over
+      # cosmetic/test-scaffolding nits (calibrated from lavasec-ios PR #43/#44 review volume).
+      # Skip if the caller ships its own .opencodereview/rule.json
+      # so we never clobber a repo's intentional customization. Written to the workspace,
+      # not committed; it does not affect the reviewed diff (origin/base..head).
+      - name: Add severity-labeling review rule
+        run: |
+          if [ -f .opencodereview/rule.json ]; then
+            echo ".opencodereview/rule.json already present in caller repo; leaving it untouched."
+            exit 0
+          fi
+          mkdir -p .opencodereview
+          cat > .opencodereview/rule.json <<'JSON'
+          {
+            "rules": [
+              {
+                "path": "**/*",
+                "merge_system_rule": true,
+                "rule": "Severity tag (required): begin every review comment with exactly one severity tag as its first characters - [P1], [P2], or [P3]. Use [P1] for high-severity issues (bugs, security flaws, data loss, or clear mistakes with a precise fix), [P2] for medium-severity issues (likely bugs, context-dependent correctness risks, or significant maintainability/performance concerns), and [P3] for low-severity issues (minor problems, style, and nitpicks). Never emit a finding without a severity tag. Focus (required): prioritize FUNCTIONAL problems - correctness and logic errors, security flaws, data loss, concurrency and race conditions, unhandled errors and edge cases, resource and lifecycle leaks, API misuse, and crash risks; these are the point of the review. Do NOT raise purely COSMETIC issues - code formatting, naming preferences, comment or documentation wording or density, import ordering, or cross-file style 'consistency' such as matching formatter or encoder options - unless they cause a functional problem. In test files, only flag a test that fails to verify the behavior it claims (an assertion that passes vacuously, targets the wrong symbol or file, or cannot catch a real regression); do NOT comment on test naming, orphaned comments, harmless duplicate assertions, or other test scaffolding style. Be selective: prefer no comment over a marginal one, do not exhaustively enumerate minor nits, and reserve [P3] for the few genuinely actionable minor issues. When unsure whether something is worth raising, omit it."
+              }
+            ]
+          }
+          JSON
+          echo "Wrote .opencodereview/rule.json:"
+          cat .opencodereview/rule.json
 
       - name: Run OpenCodeReview
         id: review

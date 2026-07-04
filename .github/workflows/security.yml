@@ -11,6 +11,15 @@ name: Security
 #     security:
 #       uses: lavasecurity/.github/.github/workflows/security.yml@main
 #       with: { gitleaks: true, semgrep: true }
+#
+# Mobile callers that want mobsfscan findings in code scanning must ALSO grant the token
+# security-events: write on the calling job — a reusable workflow cannot elevate beyond the
+# permissions the caller passes, so without this the SARIF upload 403s on public repos:
+#   jobs:
+#     security:
+#       permissions: { contents: read, security-events: write }
+#       uses: lavasecurity/.github/.github/workflows/security.yml@main
+#       with: { gitleaks: true, mobsfscan: true }
 
 on:
   workflow_call:
@@ -27,6 +36,10 @@ on:
         description: "Mobile SAST (mobsfscan). Use on iOS/Android source repos."
         type: boolean
         default: false
+      mobsfscan_sarif:
+        description: "Upload mobsfscan findings to GitHub code scanning (SARIF). Only takes effect when mobsfscan is also true. Auto-skips on private repos (code scanning needs GitHub Advanced Security) and on fork PRs (read-only token), so it is a safe default for every mobile caller. The calling job must grant security-events: write (a reusable workflow cannot elevate beyond the caller's token)."
+        type: boolean
+        default: true
       actionlint:
         description: "Lint GitHub Actions workflows (actionlint). Use on privileged CI repos."
         type: boolean
@@ -49,16 +62,24 @@ concurrency:
   group: security-${{ github.event_name }}-${{ github.event.pull_request.number || github.sha }}
   cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
-permissions:
-  contents: read
+# No workflow-level permissions block on purpose. A reusable workflow's requested
+# permissions are validated against the CALLER's granted token at startup — before any
+# `if:` can skip a job — so declaring a scope here (or on a job) that some caller does not
+# grant fails the ENTIRE run with a startup_failure, even for the jobs that caller does use.
+# Each job below requests only contents: read at the job level (within every caller's grant).
+# The mobsfscan job deliberately declares NO permissions so it inherits the caller's token:
+# a mobile caller that grants security-events: write can then upload SARIF, without forcing
+# every non-mobile caller (gitleaks/semgrep/actionlint-only) to grant that scope.
 
 jobs:
   gitleaks:
     if: ${{ inputs.gitleaks }}
     name: gitleaks (secret scan)
     runs-on: ubuntu-latest
+    permissions:
+      contents: read
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@v7
         with:
           # Full history so we can read .gitleaks.toml from the PR's base commit.
           fetch-depth: 0
@@ -115,10 +136,12 @@ jobs:
     if: ${{ inputs.semgrep }}
     name: semgrep (SAST)
     runs-on: ubuntu-latest
+    permissions:
+      contents: read
     container:
       image: semgrep/semgrep:1.166.0
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@v7
       - name: Semgrep OSS scan
         run: |
           semgrep scan --error --metrics off \
@@ -128,17 +151,57 @@ jobs:
     if: ${{ inputs.mobsfscan }}
     name: mobsfscan (mobile SAST)
     runs-on: ubuntu-latest
+    # No permissions block on purpose: this job inherits the CALLER's token. A mobile caller
+    # that grants security-events: write (see the header example) thereby enables the SARIF
+    # upload step below. Declaring security-events: write here instead would force EVERY
+    # caller — including gitleaks/semgrep/actionlint-only ones — to grant it or hit a
+    # startup_failure, because reusable-workflow permissions are validated before `if:` runs.
     steps:
-      - uses: actions/checkout@v6
-      - name: mobsfscan
-        run: pipx run mobsfscan --no-fail-safe .
+      - uses: actions/checkout@v7
+      - name: Set up Python
+        uses: actions/setup-python@v6
+        with:
+          python-version: '3.12'
+      - name: Run mobsfscan
+        # mobile-specific static analysis (insecure storage, weak crypto, ATS, etc.).
+        # --no-fail reports findings without failing the build while the ruleset beds in, but a
+        # genuine scanner error (bad args, crash) still exits non-zero and fails the job — this
+        # is deliberately NOT a blanket `|| true`, which would mask a broken scan as a green
+        # no-op. Promote findings to a required gate (drop --no-fail) once the signal is trusted.
+        run: |
+          python -m pip install --upgrade pip
+          pip install mobsfscan
+          # Human-readable report to the job log FIRST, so findings stay visible everywhere —
+          # including on private repos and fork PRs, where the SARIF upload step below is
+          # skipped. Writing SARIF straight to a file with --output prints nothing to the
+          # console, so without this the scan would be a silent no-op wherever upload is skipped.
+          mobsfscan --no-fail .
+          # Then emit SARIF for the code-scanning upload (next step; gated to public non-fork).
+          mobsfscan --no-fail --sarif --output mobsfscan.sarif .
+      - name: Upload SARIF to code scanning
+        # Preserves the capability the vendored iOS security.yml copies carried before
+        # they converged onto this reusable workflow. Skip on fork pull requests: their
+        # read-only token cannot write security events, so the upload would error. Also
+        # skip on private repos (e.g. the internal mirrors): code scanning needs GitHub
+        # Advanced Security there, so upload-sarif 403s ("Resource not accessible by
+        # integration") and would fail the job. Public repos get code scanning for free.
+        # NOTE: the calling job must grant security-events: write — a reusable workflow
+        # cannot elevate beyond the caller's token, so on a least-privilege caller this
+        # upload would 403 without it (see the caller example in the header).
+        if: ${{ always() && inputs.mobsfscan_sarif && (github.event_name != 'pull_request' || github.event.pull_request.head.repo.fork == false) && github.event.repository.visibility == 'public' }}
+        uses: github/codeql-action/upload-sarif@v4
+        with:
+          sarif_file: mobsfscan.sarif
+          category: mobsfscan
 
   actionlint:
     if: ${{ inputs.actionlint }}
     name: actionlint (workflow lint)
     runs-on: ubuntu-latest
+    permissions:
+      contents: read
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@v7
       - name: Lint workflows
         env:
           # renovate: datasource=docker
