@@ -51,9 +51,13 @@ on:
         required: true
 
 # One review per PR; a new push cancels the superseded run so rapid pushes don't
-# stack full reviews (and burn API quota).
+# stack full reviews (and burn API quota). The group key includes the event name so
+# comment-triggered runs (issue_comment) sit in a separate group from push-triggered
+# reviews (pull_request): otherwise any PR comment — another bot's review summary, or a
+# /command aimed at a different tool — enters the shared group and cancels the in-flight
+# review before skipping itself on the trigger guard below.
 concurrency:
-  group: code-review-${{ github.event.pull_request.number || github.event.issue.number || github.ref }}
+  group: code-review-${{ github.event.pull_request.number || github.event.issue.number || github.ref }}-${{ github.event_name }}
   cancel-in-progress: true
 
 permissions:
