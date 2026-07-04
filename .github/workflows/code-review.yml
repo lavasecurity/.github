@@ -166,6 +166,22 @@ jobs:
           echo "Wrote .opencodereview/rule.json:"
           cat .opencodereview/rule.json
 
+      # TEMP diagnostic — remove before merge. Probes OpenRouter directly to reveal the
+      # real HTTP error (auth/credit/preset/model) that OCR hides behind a generic message.
+      - name: DEBUG probe OpenRouter
+        env:
+          OR_KEY: ${{ secrets.llm_auth_token }}
+        run: |
+          for M in "@preset/lava-code-review" "z-ai/glm-5.2"; do
+            echo "=== probe model: $M ==="
+            curl -sS https://openrouter.ai/api/v1/chat/completions \
+              -H "Authorization: Bearer $OR_KEY" \
+              -H "Content-Type: application/json" \
+              -d "{\"model\":\"$M\",\"messages\":[{\"role\":\"user\",\"content\":\"ping\"}],\"max_tokens\":8}" \
+              -w $'\n---HTTP %{http_code}---\n' || true
+            echo
+          done
+
       - name: Run OpenCodeReview
         id: review
         # Values come from the event payload (branch names can contain shell
