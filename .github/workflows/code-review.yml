@@ -146,7 +146,9 @@ jobs:
       # OCR ranks findings internally (high/medium/low) but never puts that label in the
       # posted comment. Drop an org-default rule into the checked-out caller repo so every
       # finding is prefixed with a [P1]/[P2]/[P3] severity tag (which the post step renders
-      # verbatim from `content`). Skip if the caller ships its own .opencodereview/rule.json
+      # verbatim from `content`) AND the reviewer stays focused on functional issues over
+      # cosmetic/test-scaffolding nits (calibrated from lavasec-ios PR #43/#44 review volume).
+      # Skip if the caller ships its own .opencodereview/rule.json
       # so we never clobber a repo's intentional customization. Written to the workspace,
       # not committed; it does not affect the reviewed diff (origin/base..head).
       - name: Add severity-labeling review rule
@@ -162,7 +164,7 @@ jobs:
               {
                 "path": "**/*",
                 "merge_system_rule": true,
-                "rule": "Severity tag (required): begin every review comment with exactly one severity tag as its first characters - [P1], [P2], or [P3]. Use [P1] for high-severity issues (bugs, security flaws, data loss, or clear mistakes with a precise fix), [P2] for medium-severity issues (likely bugs, context-dependent correctness risks, or significant maintainability/performance concerns), and [P3] for low-severity issues (minor problems, style, and nitpicks). Never emit a finding without a severity tag."
+                "rule": "Severity tag (required): begin every review comment with exactly one severity tag as its first characters - [P1], [P2], or [P3]. Use [P1] for high-severity issues (bugs, security flaws, data loss, or clear mistakes with a precise fix), [P2] for medium-severity issues (likely bugs, context-dependent correctness risks, or significant maintainability/performance concerns), and [P3] for low-severity issues (minor problems, style, and nitpicks). Never emit a finding without a severity tag. Focus (required): prioritize FUNCTIONAL problems - correctness and logic errors, security flaws, data loss, concurrency and race conditions, unhandled errors and edge cases, resource and lifecycle leaks, API misuse, and crash risks; these are the point of the review. Do NOT raise purely COSMETIC issues - code formatting, naming preferences, comment or documentation wording or density, import ordering, or cross-file style 'consistency' such as matching formatter or encoder options - unless they cause a functional problem. In test files, only flag a test that fails to verify the behavior it claims (an assertion that passes vacuously, targets the wrong symbol or file, or cannot catch a real regression); do NOT comment on test naming, orphaned comments, harmless duplicate assertions, or other test scaffolding style. Be selective: prefer no comment over a marginal one, do not exhaustively enumerate minor nits, and reserve [P3] for the few genuinely actionable minor issues. When unsure whether something is worth raising, omit it."
               }
             ]
           }
