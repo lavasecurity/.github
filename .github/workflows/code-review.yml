@@ -140,6 +140,33 @@ jobs:
           ocr config set llm.use_anthropic "$OCR_USE_ANTHROPIC"
           ocr config set llm.extra_body '{"thinking": {"type": "disabled"}}'
 
+      # OCR ranks findings internally (high/medium/low) but never puts that label in the
+      # posted comment. Drop an org-default rule into the checked-out caller repo so every
+      # finding is prefixed with a [P1]/[P2]/[P3] severity tag (which the post step renders
+      # verbatim from `content`). Skip if the caller ships its own .opencodereview/rule.json
+      # so we never clobber a repo's intentional customization. Written to the workspace,
+      # not committed; it does not affect the reviewed diff (origin/base..head).
+      - name: Add severity-labeling review rule
+        run: |
+          if [ -f .opencodereview/rule.json ]; then
+            echo ".opencodereview/rule.json already present in caller repo; leaving it untouched."
+            exit 0
+          fi
+          mkdir -p .opencodereview
+          cat > .opencodereview/rule.json <<'JSON'
+          {
+            "rules": [
+              {
+                "path": "**/*",
+                "merge_system_rule": true,
+                "rule": "Severity tag (required): begin every review comment with exactly one severity tag as its first characters - [P1], [P2], or [P3]. Use [P1] for high-severity issues (bugs, security flaws, data loss, or clear mistakes with a precise fix), [P2] for medium-severity issues (likely bugs, context-dependent correctness risks, or significant maintainability/performance concerns), and [P3] for low-severity issues (minor problems, style, and nitpicks). Never emit a finding without a severity tag."
+              }
+            ]
+          }
+          JSON
+          echo "Wrote .opencodereview/rule.json:"
+          cat .opencodereview/rule.json
+
       - name: Run OpenCodeReview
         id: review
         # Values come from the event payload (branch names can contain shell
