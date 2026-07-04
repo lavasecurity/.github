@@ -5,7 +5,7 @@ name: Code Review
 # workflow itself. References @main — a normal caller of a same-repo reusable workflow;
 # the reusable only triggers on workflow_call, so there is no recursion. This repo is
 # public, so the reusable's public-only guard passes. Requires the repo secret
-# OCR_LLM_AUTH_TOKEN (the z.ai API key).
+# OCR_LLM_AUTH_TOKEN (the OpenRouter API key).
 on:
   pull_request:
     types: [opened, synchronize, reopened]
@@ -17,6 +17,6 @@ jobs:
     permissions:
       contents: read
       pull-requests: write
-    uses: lavasecurity/.github/.github/workflows/code-review.yml@claude/ocr-p123-config-vs104x
+    uses: lavasecurity/.github/.github/workflows/code-review.yml@main
     secrets:
       llm_auth_token: ${{ secrets.OCR_LLM_AUTH_TOKEN }}
