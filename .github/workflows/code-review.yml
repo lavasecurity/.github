@@ -66,11 +66,13 @@ permissions:
 
 jobs:
   code-review:
-    # On-demand and low-volume, so it stays on GitHub-hosted ubuntu-latest — moving it to
-    # Ubicloud would save ~no minutes and can't cleanly fork-gate an issue_comment trigger
-    # (the payload carries no fork status). See lavasec-infra
-    # plans/2026-07-08-linux-ci-runner-cost-plan.md.
-    runs-on: ubuntu-latest
+    # Private caller → Ubicloud (ubicloud-standard-2, overridable via the caller's LINUX_CI_RUNNER
+    # var); public repo → GitHub-hosted ubuntu-latest. No fork guard: private callers only trigger
+    # this on issue_comment (which carries no fork status), and the job's `if` below already limits
+    # execution to trusted commenters / same-repo PRs — so a maintainer-invoked /open-code-review on
+    # a fork PR does run on Ubicloud, accepted so every private GitHub-billed job uses Ubicloud.
+    # See lavasec-infra plans/2026-07-08-linux-ci-runner-cost-plan.md.
+    runs-on: ${{ github.event.repository.private && fromJSON(vars.LINUX_CI_RUNNER || '["ubicloud-standard-2"]') || fromJSON('["ubuntu-latest"]') }}
     # Runs for:
     #   * a same-repo PR (fork heads never receive the secret, so they'd fail
     #     the config/review/post steps on an empty token — skip them cleanly), or
