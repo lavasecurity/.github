@@ -67,12 +67,12 @@ permissions:
 jobs:
   code-review:
     # Private caller → Ubicloud (ubicloud-standard-2, overridable via the caller's LINUX_CI_RUNNER
-    # var); public repo → GitHub-hosted ubuntu-latest. Runner selection can't fork-gate here (the
-    # issue_comment trigger carries no fork status at allocation time), so fork PRs are instead
-    # refused in the "Get PR context" step below — it fails before any fork code is checked out with
-    # the review secrets, whatever the runner (OCR #29). See lavasec-infra
-    # plans/2026-07-08-linux-ci-runner-cost-plan.md.
-    runs-on: ${{ github.event.repository.private && fromJSON(vars.LINUX_CI_RUNNER || '["ubicloud-standard-2"]') || fromJSON('["ubuntu-latest"]') }}
+    # var); public repo or fork PR → GitHub-hosted ubuntu-latest — IDENTICAL to security.yml. The
+    # fork gate covers pull_request events; the issue_comment path (how private callers trigger this)
+    # carries no fork status at allocation time, so fork heads there are refused in the "Get PR
+    # context" step below, before any fork code is checked out with the review secrets (OCR #29).
+    # See lavasec-infra plans/2026-07-08-linux-ci-runner-cost-plan.md.
+    runs-on: ${{ (github.event.repository.private && (github.event_name != 'pull_request' || github.event.pull_request.head.repo.fork == false)) && fromJSON(vars.LINUX_CI_RUNNER || '["ubicloud-standard-2"]') || fromJSON('["ubuntu-latest"]') }}
     timeout-minutes: 30  # cap so a hung/looping review can't hold a self-hosted (Ubicloud) worker (OCR #29)
     # Runs for:
     #   * a same-repo PR (fork heads never receive the secret, so they'd fail
