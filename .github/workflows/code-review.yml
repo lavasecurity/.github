@@ -34,9 +34,9 @@ on:
         type: string
         default: "https://opencode.ai/zen/go/v1"
       llm_model:
-        description: "Model to review with. Defaults to GLM-5.2 on the OpenCode Go plan (opencode-go/glm-5.2). For an OpenRouter fallback, override llm_url + llm_model together (e.g. @preset/lava-code-review, whose fallback chain lives server-side)."
+        description: "Model to review with. Defaults to MiniMax M3 on the OpenCode Go plan (opencode-go/minimax-m3). For an OpenRouter fallback, override llm_url + llm_model together (e.g. @preset/lava-code-review, whose fallback chain lives server-side)."
         type: string
-        default: "opencode-go/glm-5.2"
+        default: "opencode-go/minimax-m3"
       use_anthropic:
         description: "Speak the Anthropic protocol. False for the OpenCode Go plan and OpenRouter (both OpenAI-compatible); true for e.g. z.ai's /api/anthropic endpoint."
         type: boolean
