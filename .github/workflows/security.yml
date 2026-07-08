@@ -90,6 +90,7 @@ jobs:
     # Runner selection — keep ALL FOUR scan jobs' runs-on IDENTICAL (canonical rationale is the
     # comment block above `jobs:`); a divergence would mis-route fork/private CI (Kilo, #29).
     runs-on: ${{ (github.event.repository.private && (github.event_name != 'pull_request' || github.event.pull_request.head.repo.fork == false)) && fromJSON(vars.LINUX_CI_RUNNER || '["ubicloud-standard-2"]') || fromJSON('["ubuntu-latest"]') }}
+    timeout-minutes: 20  # cap so a hung scanner can't hold a self-hosted (Ubicloud) worker (OCR #29)
     permissions:
       contents: read
     steps:
@@ -152,6 +153,7 @@ jobs:
     # Runner selection — keep ALL FOUR scan jobs' runs-on IDENTICAL (canonical rationale is the
     # comment block above `jobs:`); a divergence would mis-route fork/private CI (Kilo, #29).
     runs-on: ${{ (github.event.repository.private && (github.event_name != 'pull_request' || github.event.pull_request.head.repo.fork == false)) && fromJSON(vars.LINUX_CI_RUNNER || '["ubicloud-standard-2"]') || fromJSON('["ubuntu-latest"]') }}
+    timeout-minutes: 20  # cap so a hung scanner can't hold a self-hosted (Ubicloud) worker (OCR #29)
     permissions:
       contents: read
     container:
@@ -169,6 +171,7 @@ jobs:
     # Runner selection — keep ALL FOUR scan jobs' runs-on IDENTICAL (canonical rationale is the
     # comment block above `jobs:`); a divergence would mis-route fork/private CI (Kilo, #29).
     runs-on: ${{ (github.event.repository.private && (github.event_name != 'pull_request' || github.event.pull_request.head.repo.fork == false)) && fromJSON(vars.LINUX_CI_RUNNER || '["ubicloud-standard-2"]') || fromJSON('["ubuntu-latest"]') }}
+    timeout-minutes: 20  # cap so a hung scanner can't hold a self-hosted (Ubicloud) worker (OCR #29)
     # No permissions block on purpose: this job inherits the CALLER's token. A mobile caller
     # that grants security-events: write (see the header example) thereby enables the SARIF
     # upload step below. Declaring security-events: write here instead would force EVERY
@@ -218,6 +221,7 @@ jobs:
     # Runner selection — keep ALL FOUR scan jobs' runs-on IDENTICAL (canonical rationale is the
     # comment block above `jobs:`); a divergence would mis-route fork/private CI (Kilo, #29).
     runs-on: ${{ (github.event.repository.private && (github.event_name != 'pull_request' || github.event.pull_request.head.repo.fork == false)) && fromJSON(vars.LINUX_CI_RUNNER || '["ubicloud-standard-2"]') || fromJSON('["ubuntu-latest"]') }}
+    timeout-minutes: 20  # cap so a hung scanner can't hold a self-hosted (Ubicloud) worker (OCR #29)
     permissions:
       contents: read
     steps:

@@ -67,12 +67,13 @@ permissions:
 jobs:
   code-review:
     # Private caller → Ubicloud (ubicloud-standard-2, overridable via the caller's LINUX_CI_RUNNER
-    # var); public repo → GitHub-hosted ubuntu-latest. No fork guard: private callers only trigger
-    # this on issue_comment (which carries no fork status), and the job's `if` below already limits
-    # execution to trusted commenters / same-repo PRs — so a maintainer-invoked /open-code-review on
-    # a fork PR does run on Ubicloud, accepted so every private GitHub-billed job uses Ubicloud.
-    # See lavasec-infra plans/2026-07-08-linux-ci-runner-cost-plan.md.
+    # var); public repo → GitHub-hosted ubuntu-latest. Runner selection can't fork-gate here (the
+    # issue_comment trigger carries no fork status at allocation time), so fork PRs are instead
+    # refused in the "Get PR context" step below — it fails before any fork code is checked out with
+    # the review secrets, whatever the runner (OCR #29). See lavasec-infra
+    # plans/2026-07-08-linux-ci-runner-cost-plan.md.
     runs-on: ${{ github.event.repository.private && fromJSON(vars.LINUX_CI_RUNNER || '["ubicloud-standard-2"]') || fromJSON('["ubuntu-latest"]') }}
+    timeout-minutes: 30  # cap so a hung/looping review can't hold a self-hosted (Ubicloud) worker (OCR #29)
     # Runs for:
     #   * a same-repo PR (fork heads never receive the secret, so they'd fail
     #     the config/review/post steps on an empty token — skip them cleanly), or
@@ -107,6 +108,17 @@ jobs:
               repo: context.repo.repo,
               pull_number: prNumber
             });
+            // Fork guard (OCR #29): the on-demand issue_comment path resolves the PR here, BEFORE
+            // checkout — so refuse fork heads before any untrusted code runs with the review
+            // secrets. The pull_request auto-review path already gates same-repo in the job `if:`;
+            // this mirrors it for issue_comment, which the `if:` can't (the comment payload carries
+            // no head.repo). Matters most on private repos, whose runner is the self-hosted Ubicloud
+            // fleet, but the checkout+secrets exposure is runner-independent, so gate uniformly.
+            const baseFull = `${context.repo.owner}/${context.repo.repo}`;
+            if (pullRequest.head.repo.full_name !== baseFull) {
+              core.setFailed(`Refusing on-demand review of a fork PR (head ${pullRequest.head.repo.full_name} != ${baseFull}): it would check out untrusted code with the review secrets. Push the branch to ${baseFull} and review from there.`);
+              return;
+            }
             core.setOutput('base_ref', pullRequest.base.ref);
             core.setOutput('head_ref', pullRequest.head.ref);
             core.setOutput('head_sha', pullRequest.head.sha);
