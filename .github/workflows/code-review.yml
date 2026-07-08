@@ -45,6 +45,13 @@ on:
         description: "Pin @alibaba-group/open-code-review to a version. Empty = latest."
         type: string
         default: ""
+      runs_on:
+        description: "Runner label(s) as a JSON array string. Defaults to '[\"ubuntu-latest\"]'
+          (GitHub-hosted), so public callers are unaffected. A PRIVATE caller over its
+          Actions-minute cap can pass e.g. '[\"ubicloud-standard-2\"]' — see
+          lavasec-infra plans/2026-07-08-linux-ci-runner-cost-plan.md."
+        type: string
+        default: '["ubuntu-latest"]'
     secrets:
       llm_auth_token:
         description: "API key for the LLM endpoint (e.g. your OpenRouter key)."
@@ -66,7 +73,7 @@ permissions:
 
 jobs:
   code-review:
-    runs-on: ubuntu-latest
+    runs-on: ${{ fromJSON(inputs.runs_on) }}
     # Runs for:
     #   * a same-repo PR (fork heads never receive the secret, so they'd fail
     #     the config/review/post steps on an empty token — skip them cleanly), or

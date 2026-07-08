@@ -44,6 +44,15 @@ on:
         description: "Lint GitHub Actions workflows (actionlint). Use on privileged CI repos."
         type: boolean
         default: false
+      runs_on:
+        description: "Runner label(s) as a JSON array string for every scan job. Defaults to
+          '[\"ubuntu-latest\"]' (GitHub-hosted), so public callers are unaffected. A PRIVATE
+          caller over its Actions-minute cap can pass e.g. '[\"ubicloud-standard-2\"]' to run
+          the scanners on a cheaper runner — see
+          lavasec-infra plans/2026-07-08-linux-ci-runner-cost-plan.md. All scanners run in
+          Docker/containers, so the target runner needs Docker; Ubicloud provides it."
+        type: string
+        default: '["ubuntu-latest"]'
 
 # Centralised cancellation policy for every caller. A fast-moving PR otherwise stacks
 # up redundant full-history scans — each new commit starts another while the previous
@@ -75,7 +84,7 @@ jobs:
   gitleaks:
     if: ${{ inputs.gitleaks }}
     name: gitleaks (secret scan)
-    runs-on: ubuntu-latest
+    runs-on: ${{ fromJSON(inputs.runs_on) }}
     permissions:
       contents: read
     steps:
@@ -135,7 +144,7 @@ jobs:
   semgrep:
     if: ${{ inputs.semgrep }}
     name: semgrep (SAST)
-    runs-on: ubuntu-latest
+    runs-on: ${{ fromJSON(inputs.runs_on) }}
     permissions:
       contents: read
     container:
@@ -150,7 +159,7 @@ jobs:
   mobsfscan:
     if: ${{ inputs.mobsfscan }}
     name: mobsfscan (mobile SAST)
-    runs-on: ubuntu-latest
+    runs-on: ${{ fromJSON(inputs.runs_on) }}
     # No permissions block on purpose: this job inherits the CALLER's token. A mobile caller
     # that grants security-events: write (see the header example) thereby enables the SARIF
     # upload step below. Declaring security-events: write here instead would force EVERY
@@ -197,7 +206,7 @@ jobs:
   actionlint:
     if: ${{ inputs.actionlint }}
     name: actionlint (workflow lint)
-    runs-on: ubuntu-latest
+    runs-on: ${{ fromJSON(inputs.runs_on) }}
     permissions:
       contents: read
     steps:
