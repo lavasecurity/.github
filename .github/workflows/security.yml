@@ -87,6 +87,8 @@ jobs:
   gitleaks:
     if: ${{ inputs.gitleaks }}
     name: gitleaks (secret scan)
+    # Runner selection — keep ALL FOUR scan jobs' runs-on IDENTICAL (canonical rationale is the
+    # comment block above `jobs:`); a divergence would mis-route fork/private CI (Kilo, #29).
     runs-on: ${{ (github.event.repository.private && (github.event_name != 'pull_request' || github.event.pull_request.head.repo.fork == false)) && fromJSON(vars.LINUX_CI_RUNNER || '["ubicloud-standard-2"]') || fromJSON('["ubuntu-latest"]') }}
     permissions:
       contents: read
@@ -147,6 +149,8 @@ jobs:
   semgrep:
     if: ${{ inputs.semgrep }}
     name: semgrep (SAST)
+    # Runner selection — keep ALL FOUR scan jobs' runs-on IDENTICAL (canonical rationale is the
+    # comment block above `jobs:`); a divergence would mis-route fork/private CI (Kilo, #29).
     runs-on: ${{ (github.event.repository.private && (github.event_name != 'pull_request' || github.event.pull_request.head.repo.fork == false)) && fromJSON(vars.LINUX_CI_RUNNER || '["ubicloud-standard-2"]') || fromJSON('["ubuntu-latest"]') }}
     permissions:
       contents: read
@@ -162,6 +166,8 @@ jobs:
   mobsfscan:
     if: ${{ inputs.mobsfscan }}
     name: mobsfscan (mobile SAST)
+    # Runner selection — keep ALL FOUR scan jobs' runs-on IDENTICAL (canonical rationale is the
+    # comment block above `jobs:`); a divergence would mis-route fork/private CI (Kilo, #29).
     runs-on: ${{ (github.event.repository.private && (github.event_name != 'pull_request' || github.event.pull_request.head.repo.fork == false)) && fromJSON(vars.LINUX_CI_RUNNER || '["ubicloud-standard-2"]') || fromJSON('["ubuntu-latest"]') }}
     # No permissions block on purpose: this job inherits the CALLER's token. A mobile caller
     # that grants security-events: write (see the header example) thereby enables the SARIF
@@ -209,6 +215,8 @@ jobs:
   actionlint:
     if: ${{ inputs.actionlint }}
     name: actionlint (workflow lint)
+    # Runner selection — keep ALL FOUR scan jobs' runs-on IDENTICAL (canonical rationale is the
+    # comment block above `jobs:`); a divergence would mis-route fork/private CI (Kilo, #29).
     runs-on: ${{ (github.event.repository.private && (github.event_name != 'pull_request' || github.event.pull_request.head.repo.fork == false)) && fromJSON(vars.LINUX_CI_RUNNER || '["ubicloud-standard-2"]') || fromJSON('["ubuntu-latest"]') }}
     permissions:
       contents: read
