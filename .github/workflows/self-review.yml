@@ -5,7 +5,7 @@ name: Code Review
 # workflow itself. References @main — a normal caller of a same-repo reusable workflow;
 # the reusable only triggers on workflow_call, so there is no recursion. This repo is
 # public, so the reusable's public-only guard passes. Requires the repo secret
-# OCR_LLM_AUTH_TOKEN (the OpenRouter API key).
+# OCR_LLM_AUTH_TOKEN (the OpenCode Go API key).
 on:
   pull_request:
     types: [opened, synchronize, reopened]
