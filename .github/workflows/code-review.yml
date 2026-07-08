@@ -30,15 +30,15 @@ on:
   workflow_call:
     inputs:
       llm_url:
-        description: "LLM endpoint. Defaults to OpenRouter's OpenAI-compatible API."
+        description: "LLM endpoint. Defaults to the OpenCode Go plan's OpenAI-compatible API. Point at OpenRouter (https://openrouter.ai/api/v1) + its key to fall back to that provider."
         type: string
-        default: "https://openrouter.ai/api/v1"
+        default: "https://opencode.ai/zen/go/v1"
       llm_model:
-        description: "Model to review with. Defaults to an OpenRouter preset that holds the model + fallback chain + routing server-side."
+        description: "Model to review with. Defaults to MiniMax M3 on the OpenCode Go plan (opencode-go/minimax-m3). For an OpenRouter fallback, override llm_url + llm_model together (e.g. @preset/lava-code-review, whose fallback chain lives server-side)."
         type: string
-        default: "@preset/lava-code-review"
+        default: "opencode-go/minimax-m3"
       use_anthropic:
-        description: "Speak the Anthropic protocol. False for OpenRouter (OpenAI-compatible); true for e.g. z.ai's /api/anthropic endpoint."
+        description: "Speak the Anthropic protocol. False for the OpenCode Go plan and OpenRouter (both OpenAI-compatible); true for e.g. z.ai's /api/anthropic endpoint."
         type: boolean
         default: false
       ocr_version:
@@ -47,7 +47,7 @@ on:
         default: ""
     secrets:
       llm_auth_token:
-        description: "API key for the LLM endpoint (e.g. your OpenRouter key)."
+        description: "API key for the configured LLM endpoint (e.g. your OpenCode Go API key; an OpenRouter key if llm_url is overridden to OpenRouter)."
         required: true
 
 # One review per PR; a new push cancels the superseded run so rapid pushes don't
