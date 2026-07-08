@@ -114,9 +114,12 @@ jobs:
             // this mirrors it for issue_comment, which the `if:` can't (the comment payload carries
             // no head.repo). Matters most on private repos, whose runner is the self-hosted Ubicloud
             // fleet, but the checkout+secrets exposure is runner-independent, so gate uniformly.
+            // head.repo is null when the fork was deleted (stale PRs) — still not same-repo, so
+            // refuse, but with the same helpful message rather than a "Cannot read null" crash (OCR #29).
             const baseFull = `${context.repo.owner}/${context.repo.repo}`;
-            if (pullRequest.head.repo.full_name !== baseFull) {
-              core.setFailed(`Refusing on-demand review of a fork PR (head ${pullRequest.head.repo.full_name} != ${baseFull}): it would check out untrusted code with the review secrets. Push the branch to ${baseFull} and review from there.`);
+            if (!pullRequest.head.repo || pullRequest.head.repo.full_name !== baseFull) {
+              const headFull = pullRequest.head.repo ? pullRequest.head.repo.full_name : '<deleted fork>';
+              core.setFailed(`Refusing on-demand review of a fork PR (head ${headFull} != ${baseFull}): it would check out untrusted code with the review secrets. Push the branch to ${baseFull} and review from there.`);
               return;
             }
             core.setOutput('base_ref', pullRequest.base.ref);
