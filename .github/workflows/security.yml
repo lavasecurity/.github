@@ -49,8 +49,9 @@ on:
           '[\"ubuntu-latest\"]' (GitHub-hosted), so public callers are unaffected. A PRIVATE
           caller over its Actions-minute cap can pass e.g. '[\"ubicloud-standard-2\"]' to run
           the scanners on a cheaper runner — see
-          lavasec-infra plans/2026-07-08-linux-ci-runner-cost-plan.md. All scanners run in
-          Docker/containers, so the target runner needs Docker; Ubicloud provides it."
+          lavasec-infra plans/2026-07-08-linux-ci-runner-cost-plan.md. gitleaks, semgrep and
+          actionlint run in Docker/containers, so the target runner needs Docker (Ubicloud
+          provides it); mobsfscan runs natively via setup-python + pip."
         type: string
         default: '["ubuntu-latest"]'
 
