@@ -44,16 +44,6 @@ on:
         description: "Lint GitHub Actions workflows (actionlint). Use on privileged CI repos."
         type: boolean
         default: false
-      runs_on:
-        description: "Runner label(s) as a JSON array string for every scan job. Defaults to
-          '[\"ubuntu-latest\"]' (GitHub-hosted), so public callers are unaffected. A PRIVATE
-          caller over its Actions-minute cap can pass e.g. '[\"ubicloud-standard-2\"]' to run
-          the scanners on a cheaper runner — see
-          lavasec-infra plans/2026-07-08-linux-ci-runner-cost-plan.md. gitleaks, semgrep and
-          actionlint run in Docker/containers, so the target runner needs Docker (Ubicloud
-          provides it); mobsfscan runs natively via setup-python + pip."
-        type: string
-        default: '["ubuntu-latest"]'
 
 # Centralised cancellation policy for every caller. A fast-moving PR otherwise stacks
 # up redundant full-history scans — each new commit starts another while the previous
@@ -81,11 +71,23 @@ concurrency:
 # a mobile caller that grants security-events: write can then upload SARIF, without forcing
 # every non-mobile caller (gitleaks/semgrep/actionlint-only) to grant that scope.
 
+# Runner selection is CENTRALISED here so callers pass nothing (no org-level Actions variable
+# exists on an individual account, so this is decided from the event, not a shared var): every
+# scan job runs on Ubicloud (ubicloud-standard-2) only when the CALLER repo is PRIVATE and the
+# event is not a fork PR — keeping Linux CI off the shared GitHub Pro minute cap. Public repos
+# (github.event.repository.private == false, e.g. lavasec-ios/lavasec-doc) and fork PRs fall
+# back to GitHub-hosted ubuntu-latest, which is free and never runs untrusted code on Ubicloud.
+# A private caller can still override its runner with a repo-level LINUX_CI_RUNNER variable
+# (e.g. '["ubuntu-latest"]' to roll back). See lavasec-infra
+# plans/2026-07-08-linux-ci-runner-cost-plan.md.
+# NOTE: security.yml is only ever called on push/pull_request, so github.event.repository is
+# always present here (it is absent on schedule events, which never reach this workflow).
+
 jobs:
   gitleaks:
     if: ${{ inputs.gitleaks }}
     name: gitleaks (secret scan)
-    runs-on: ${{ fromJSON(inputs.runs_on) }}
+    runs-on: ${{ (github.event.repository.private && (github.event_name != 'pull_request' || github.event.pull_request.head.repo.fork == false)) && fromJSON(vars.LINUX_CI_RUNNER || '["ubicloud-standard-2"]') || fromJSON('["ubuntu-latest"]') }}
     permissions:
       contents: read
     steps:
@@ -145,7 +147,7 @@ jobs:
   semgrep:
     if: ${{ inputs.semgrep }}
     name: semgrep (SAST)
-    runs-on: ${{ fromJSON(inputs.runs_on) }}
+    runs-on: ${{ (github.event.repository.private && (github.event_name != 'pull_request' || github.event.pull_request.head.repo.fork == false)) && fromJSON(vars.LINUX_CI_RUNNER || '["ubicloud-standard-2"]') || fromJSON('["ubuntu-latest"]') }}
     permissions:
       contents: read
     container:
@@ -160,7 +162,7 @@ jobs:
   mobsfscan:
     if: ${{ inputs.mobsfscan }}
     name: mobsfscan (mobile SAST)
-    runs-on: ${{ fromJSON(inputs.runs_on) }}
+    runs-on: ${{ (github.event.repository.private && (github.event_name != 'pull_request' || github.event.pull_request.head.repo.fork == false)) && fromJSON(vars.LINUX_CI_RUNNER || '["ubicloud-standard-2"]') || fromJSON('["ubuntu-latest"]') }}
     # No permissions block on purpose: this job inherits the CALLER's token. A mobile caller
     # that grants security-events: write (see the header example) thereby enables the SARIF
     # upload step below. Declaring security-events: write here instead would force EVERY
@@ -207,7 +209,7 @@ jobs:
   actionlint:
     if: ${{ inputs.actionlint }}
     name: actionlint (workflow lint)
-    runs-on: ${{ fromJSON(inputs.runs_on) }}
+    runs-on: ${{ (github.event.repository.private && (github.event_name != 'pull_request' || github.event.pull_request.head.repo.fork == false)) && fromJSON(vars.LINUX_CI_RUNNER || '["ubicloud-standard-2"]') || fromJSON('["ubuntu-latest"]') }}
     permissions:
       contents: read
     steps:
