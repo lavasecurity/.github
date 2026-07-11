@@ -1,8 +1,8 @@
 blank_issues_enabled: true
 contact_links:
   - name: 🔒 Found a security problem?
-    url: https://lavasecurity.app
-    about: Don't post it publicly. Email security@lavasecurity.app, or use this repo's Security ▸ Advisories tab.
+    url: https://github.com/lavasecurity/.github/security/policy
+    about: Don't post it publicly. Read our security policy, email security@lavasecurity.app, or use this repo's Security ▸ Advisories tab.
   - name: 📚 Just need help?
     url: https://docs.lavasecurity.app
     about: The docs cover setup, turning protection on, and trusted-site issues.
