@@ -1,0 +1,68 @@
+name: 🐞 Bug report
+description: Report something that isn't working the way it should.
+labels: ["bug"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thanks for taking the time to file a bug. Please fill out the fields below so we can
+        reproduce and fix it. **Do not report security vulnerabilities here** — email
+        **security@lavasecurity.app** or use the repository's **Security ▸ Advisories** tab instead.
+  - type: textarea
+    id: what-happened
+    attributes:
+      label: What happened?
+      description: A clear description of the bug and its impact.
+      placeholder: When I do X, Y happens instead of Z.
+    validations:
+      required: true
+  - type: textarea
+    id: repro
+    attributes:
+      label: Steps to reproduce
+      description: The exact steps to trigger the behavior. A minimal repro helps a lot.
+      placeholder: |
+        1. Go to '...'
+        2. Tap '...'
+        3. See the error
+    validations:
+      required: true
+  - type: textarea
+    id: expected
+    attributes:
+      label: Expected behavior
+      description: What did you expect to happen instead?
+    validations:
+      required: true
+  - type: input
+    id: version
+    attributes:
+      label: Version / commit
+      description: App version, release tag, or commit SHA where you saw this.
+      placeholder: "v1.2.1 (or commit abc1234)"
+    validations:
+      required: false
+  - type: input
+    id: environment
+    attributes:
+      label: Environment
+      description: OS/device, browser, or component affected (e.g. iOS 26.4 on iPhone 15, or docs site on Firefox).
+      placeholder: "iOS 26.4 · iPhone 15 Pro"
+    validations:
+      required: false
+  - type: textarea
+    id: logs
+    attributes:
+      label: Logs or screenshots
+      description: Paste any relevant logs (redact anything private) or drag in screenshots.
+    validations:
+      required: false
+  - type: checkboxes
+    id: checks
+    attributes:
+      label: Before submitting
+      options:
+        - label: I searched existing issues and this isn't a duplicate.
+          required: true
+        - label: This is not a security vulnerability (those go to security@lavasecurity.app).
+          required: true
