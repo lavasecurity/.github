@@ -1,10 +1,8 @@
-# Blank issues stay enabled so maintainers can file quick internal issues without a form.
-# Public bug/feature reports are still guided into the structured templates above.
 blank_issues_enabled: true
 contact_links:
-  - name: 🔒 Report a security vulnerability
+  - name: 🔒 Found a security problem?
     url: https://lavasecurity.app
-    about: Please don't file security issues publicly. Email security@lavasecurity.app, or use this repository's Security ▸ Advisories tab.
-  - name: 📚 Documentation & help
+    about: Don't post it publicly. Email security@lavasecurity.app, or use this repo's Security ▸ Advisories tab.
+  - name: 📚 Just need help?
     url: https://docs.lavasecurity.app
-    about: Check the docs first — your question may already be answered there.
+    about: The docs cover setup, turning protection on, and trusted-site issues.

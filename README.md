@@ -14,7 +14,7 @@ override any of them by committing its own file of the same type.
 | --- | --- |
 | [`CODE_OF_CONDUCT.md`](CODE_OF_CONDUCT.md) | Contributor Covenant 2.1; conduct reports go to `security@lavasecurity.app` |
 | [`.github/PULL_REQUEST_TEMPLATE.md`](.github/PULL_REQUEST_TEMPLATE.md) | Pre-fills the PR description in every repo |
-| [`.github/ISSUE_TEMPLATE/`](.github/ISSUE_TEMPLATE) | 🐞 Bug report + 💡 Feature request issue forms, plus a chooser `config.yml` (blank issues stay enabled; security reports are deflected to `security@lavasecurity.app`) |
+| [`.github/ISSUE_TEMPLATE/`](.github/ISSUE_TEMPLATE) | 🐞 Bug report + 💡 Idea / feature request issue forms, plus a chooser `config.yml` (blank issues stay enabled; security reports are deflected to `security@lavasecurity.app`) |
 
 These show up in each repo's community profile as *"inherited from the lavasecurity/.github
 repository."* Resolution order GitHub uses when a repo lacks its own copy: the repo's
