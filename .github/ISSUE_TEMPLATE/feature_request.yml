@@ -1,0 +1,26 @@
+name: 💡 Idea / feature request
+description: Suggest something Lava could do better.
+labels: ["enhancement"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Got an idea? Tell us the problem first — that's usually more useful than the solution.
+  - type: textarea
+    id: problem
+    attributes:
+      label: What's the problem?
+      description: What are you trying to do, and where does Lava get in the way today?
+    validations:
+      required: true
+  - type: textarea
+    id: idea
+    attributes:
+      label: What would you like to see?
+      description: Your idea for fixing it — rough is fine.
+    validations:
+      required: true
+  - type: markdown
+    attributes:
+      value: |
+        Heads up: Lava is privacy-first, so features that would routinely upload browsing data are a hard no.

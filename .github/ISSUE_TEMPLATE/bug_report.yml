@@ -1,0 +1,42 @@
+name: 🐞 Bug report
+description: Something isn't working the way it should.
+labels: ["bug"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thanks for helping make Lava better — keep it short, just enough for us to see what you see.
+        **Is it a security problem?** Don't post it here — email security@lavasecurity.app instead.
+  - type: textarea
+    id: what
+    attributes:
+      label: What's going wrong?
+      description: What happened, and what did you expect instead?
+    validations:
+      required: true
+  - type: textarea
+    id: steps
+    attributes:
+      label: How can we see it too?
+      description: Steps to reproduce it. If it's intermittent, just say so.
+    validations:
+      required: true
+  - type: input
+    id: setup
+    attributes:
+      label: Your setup
+      description: App version and device / OS, if you know them.
+      placeholder: v1.2.1 · iPhone 15 · iOS 26.4
+    validations:
+      required: false
+  - type: markdown
+    attributes:
+      value: |
+        Screenshots or logs help — just **redact any domains or details you'd rather not make public** first.
+  - type: checkboxes
+    id: ack
+    attributes:
+      label: One quick check
+      options:
+        - label: This isn't a security vulnerability (those go to security@lavasecurity.app).
+          required: true
