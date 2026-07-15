@@ -232,7 +232,13 @@ jobs:
           # first lands, on Codex/Kilo, and on `/open-code-review` for an explicit full re-review.
           if [ "$EVENT_NAME" = "pull_request" ] && [ "$PR_ACTION" = "synchronize" ] \
              && [ -n "$PR_BEFORE" ] \
-             && [ "$PR_BEFORE" != "0000000000000000000000000000000000000000" ]; then
+             && [ "$PR_BEFORE" != "0000000000000000000000000000000000000000" ] \
+             && { [[ "$PR_BEFORE" =~ ^[0-9a-f]{40}$ ]] || [[ "$PR_BEFORE" =~ ^[0-9a-f]{64}$ ]]; }; then
+            # PR_BEFORE must be a full commit hash (SHA-1 40-hex or SHA-256 64-hex) before it is
+            # handed to `git fetch` — a non-SHA value would be interpreted as a refspec and fetched.
+            # GitHub always sets `before` to a SHA on pull_request.synchronize; this is defense in
+            # depth so a future payload change / misrouted event forces the full-review fallback
+            # rather than fetching an arbitrary ref.
             if git fetch --no-tags origin "$PR_BEFORE" 2>/dev/null \
                && git cat-file -e "${PR_BEFORE}^{commit}" 2>/dev/null; then
               # Use the prior head as the incremental base ONLY when EVERY commit added since it is a
@@ -244,7 +250,7 @@ jobs:
               # empty — fall back to the full origin/base..HEAD diff.
               ADDED_TOTAL=$(git rev-list --count "${PR_BEFORE}..${HEAD_SHA}" 2>/dev/null || echo 0)
               ADDED_PR_ONLY=$(git rev-list --count "${PR_BEFORE}..${HEAD_SHA}" "^origin/${BASE_REF}" 2>/dev/null || echo 0)
-              if [ "$ADDED_TOTAL" -gt 0 ] && [ "$ADDED_TOTAL" = "$ADDED_PR_ONLY" ]; then
+              if [ "$ADDED_TOTAL" -gt 0 ] && [ "$ADDED_TOTAL" -eq "$ADDED_PR_ONLY" ]; then
                 FROM_REF="$PR_BEFORE"
                 echo "Incremental review: ${ADDED_TOTAL} commit(s) since prior head ${PR_BEFORE}."
               else
