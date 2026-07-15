@@ -199,6 +199,8 @@ jobs:
         # metacharacters), so route them through env rather than inline ${{ }}.
         env:
           EVENT_NAME: ${{ github.event_name }}
+          PR_ACTION: ${{ github.event.action }}
+          PR_BEFORE: ${{ github.event.before }}
           PR_BASE_REF: ${{ github.event.pull_request.base.ref }}
           PR_HEAD_SHA: ${{ github.event.pull_request.head.sha }}
           CTX_BASE_REF: ${{ steps.pr-context.outputs.base_ref }}
@@ -211,9 +213,57 @@ jobs:
             BASE_REF="$CTX_BASE_REF"
             HEAD_SHA="$CTX_HEAD_SHA"
           fi
-          echo "Reviewing ${HEAD_SHA} against origin/${BASE_REF}"
+
+          # Default: review the WHOLE PR diff (base..head). The first review (opened/reopened) and
+          # every on-demand issue_comment run always look at the entire PR.
+          FROM_REF="origin/${BASE_REF}"
+
+          # Incremental: on a `synchronize` push (a new push to an already-open PR) review ONLY the
+          # commits added since the previous head, so a long-lived PR isn't re-reviewed end-to-end on
+          # every push (which re-surfaces the same findings and drowns the genuinely-new ones — the
+          # noise calibrated from the lavasec-ios sync PRs). The `pull_request.synchronize` payload
+          # carries `before`/`after`; diff `before..HEAD` when those added commits are all PR commits.
+          # Falls back to the full base..head diff whenever `before` is unusable — a zero SHA (branch
+          # (re)created), a force-pushed old head GitHub has already GC'd so we can't fetch it, or a
+          # base-update push whose range would drag in base-branch commits (see the inner guard) — so
+          # we NEVER review an empty or bogus range;
+          # the failure mode is "full review", never a broken one. NOTE (recall trade-off): a later
+          # push does not re-scan earlier files, so this leans on each file being reviewed when it
+          # first lands, on Codex/Kilo, and on `/open-code-review` for an explicit full re-review.
+          if [ "$EVENT_NAME" = "pull_request" ] && [ "$PR_ACTION" = "synchronize" ] \
+             && [ -n "$PR_BEFORE" ] \
+             && [ "$PR_BEFORE" != "0000000000000000000000000000000000000000" ] \
+             && { [[ "$PR_BEFORE" =~ ^[0-9a-f]{40}$ ]] || [[ "$PR_BEFORE" =~ ^[0-9a-f]{64}$ ]]; }; then
+            # PR_BEFORE must be a full commit hash (SHA-1 40-hex or SHA-256 64-hex) before it is
+            # handed to `git fetch` — a non-SHA value would be interpreted as a refspec and fetched.
+            # GitHub always sets `before` to a SHA on pull_request.synchronize; this is defense in
+            # depth so a future payload change / misrouted event forces the full-review fallback
+            # rather than fetching an arbitrary ref.
+            if git fetch --no-tags origin "$PR_BEFORE" 2>/dev/null \
+               && git cat-file -e "${PR_BEFORE}^{commit}" 2>/dev/null; then
+              # Use the prior head as the incremental base ONLY when EVERY commit added since it is a
+              # genuine PR commit — i.e. none are reachable from the current base. A `synchronize`
+              # fired by a BASE UPDATE ("Update branch" merge, or a rebase onto a newer base) pulls
+              # base commits into before..HEAD, and OCR does a two-endpoint TREE diff
+              # (git diff before HEAD), so those base changes would otherwise be reviewed as the PR
+              # delta (Codex on lavasecurity/.github#35). When the range holds any base commit — or is
+              # empty — fall back to the full origin/base..HEAD diff.
+              ADDED_TOTAL=$(git rev-list --count "${PR_BEFORE}..${HEAD_SHA}" 2>/dev/null || echo 0)
+              ADDED_PR_ONLY=$(git rev-list --count "${PR_BEFORE}..${HEAD_SHA}" "^origin/${BASE_REF}" 2>/dev/null || echo 0)
+              if [ "$ADDED_TOTAL" -gt 0 ] && [ "$ADDED_TOTAL" -eq "$ADDED_PR_ONLY" ]; then
+                FROM_REF="$PR_BEFORE"
+                echo "Incremental review: ${ADDED_TOTAL} commit(s) since prior head ${PR_BEFORE}."
+              else
+                echo "synchronize brought in base commits or added nothing (total=${ADDED_TOTAL}, pr-only=${ADDED_PR_ONLY}); reviewing the full PR diff."
+              fi
+            else
+              echo "Prior head ${PR_BEFORE} unavailable (GC'd / force-push); reviewing the full PR diff."
+            fi
+          fi
+
+          echo "Reviewing ${HEAD_SHA} against ${FROM_REF}"
           ocr review \
-            --from "origin/${BASE_REF}" \
+            --from "${FROM_REF}" \
             --to "${HEAD_SHA}" \
             --format json \
             > /tmp/ocr-result.json 2>/tmp/ocr-stderr.log || true
