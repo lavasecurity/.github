@@ -199,6 +199,8 @@ jobs:
         # metacharacters), so route them through env rather than inline ${{ }}.
         env:
           EVENT_NAME: ${{ github.event_name }}
+          PR_ACTION: ${{ github.event.action }}
+          PR_BEFORE: ${{ github.event.before }}
           PR_BASE_REF: ${{ github.event.pull_request.base.ref }}
           PR_HEAD_SHA: ${{ github.event.pull_request.head.sha }}
           CTX_BASE_REF: ${{ steps.pr-context.outputs.base_ref }}
@@ -211,9 +213,36 @@ jobs:
             BASE_REF="$CTX_BASE_REF"
             HEAD_SHA="$CTX_HEAD_SHA"
           fi
-          echo "Reviewing ${HEAD_SHA} against origin/${BASE_REF}"
+
+          # Default: review the WHOLE PR diff (base..head). The first review (opened/reopened) and
+          # every on-demand issue_comment run always look at the entire PR.
+          FROM_REF="origin/${BASE_REF}"
+
+          # Incremental: on a `synchronize` push (a new push to an already-open PR) review ONLY the
+          # commits added since the previous head, so a long-lived PR isn't re-reviewed end-to-end on
+          # every push (which re-surfaces the same findings and drowns the genuinely-new ones — the
+          # noise calibrated from the lavasec-ios sync PRs). The `pull_request.synchronize` payload
+          # carries `before`/`after`; diff `before..HEAD`. Falls back to the full base..head diff
+          # whenever `before` is unusable — a zero SHA (branch (re)created) or a force-pushed old head
+          # GitHub has already GC'd so we can't fetch it — so we NEVER review an empty or bogus range;
+          # the failure mode is "full review", never a broken one. NOTE (recall trade-off): a later
+          # push does not re-scan earlier files, so this leans on each file being reviewed when it
+          # first lands, on Codex/Kilo, and on `/open-code-review` for an explicit full re-review.
+          if [ "$EVENT_NAME" = "pull_request" ] && [ "$PR_ACTION" = "synchronize" ] \
+             && [ -n "$PR_BEFORE" ] \
+             && [ "$PR_BEFORE" != "0000000000000000000000000000000000000000" ]; then
+            if git fetch --no-tags origin "$PR_BEFORE" 2>/dev/null \
+               && git cat-file -e "${PR_BEFORE}^{commit}" 2>/dev/null; then
+              FROM_REF="$PR_BEFORE"
+              echo "Incremental review: commits since prior head ${PR_BEFORE}."
+            else
+              echo "Prior head ${PR_BEFORE} unavailable (GC'd / force-push); reviewing the full PR diff."
+            fi
+          fi
+
+          echo "Reviewing ${HEAD_SHA} against ${FROM_REF}"
           ocr review \
-            --from "origin/${BASE_REF}" \
+            --from "${FROM_REF}" \
             --to "${HEAD_SHA}" \
             --format json \
             > /tmp/ocr-result.json 2>/tmp/ocr-stderr.log || true
