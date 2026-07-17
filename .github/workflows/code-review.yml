@@ -329,6 +329,24 @@ jobs:
           echo "=== OCR stderr ==="
           cat /tmp/ocr-stderr.log
 
+      # Posts OCR's findings as one PR review with inline comments. Before posting, new
+      # inline comments are deduplicated POSITIONALLY (path + line-range) against THIS
+      # WORKFLOW'S existing inline comments on the PR — recognized by a hidden provenance
+      # marker stamped on every comment we post (legacy pre-marker comments by their
+      # mandated [P1-3] prefix), NOT by the shared github-actions[bot] login alone, so
+      # other workflows' comments never suppress a finding: OCR itself never reads PR
+      # state, so every
+      # synchronize re-review re-raised prior findings — 28% of the 113-comment volume on
+      # lavasec-ios#69 was cross-round re-raises. Semantics mirror upstream's bundled-action
+      # `incremental` mode: two single-line comments match on the same line, two multi-line
+      # comments match at line-range IoU >= 0.6, and single-vs-multi never match. Within-run
+      # duplicates (the model occasionally emits the same finding twice in one review, seen
+      # on lavasec-ios#70) are dropped by the same rule. Accepted tradeoffs for an advisory
+      # reviewer: a genuinely NEW issue on an already-commented range is suppressed, and
+      # line drift from force-pushes/rebases can re-expose old findings (outdated comments
+      # match at their original_line). A run whose findings are ALL suppressed posts nothing
+      # at all — no summary — so repeat pushes don't accumulate timeline noise; if listing
+      # existing comments fails, the run posts everything rather than dropping findings.
       - name: Post review comments to PR
         uses: actions/github-script@v9
         with:
@@ -336,6 +354,13 @@ jobs:
           script: |
             const fs = require('fs');
             const path = '/tmp/ocr-result.json';
+
+            // Provenance stamp appended (invisibly) to every inline comment this workflow
+            // posts, so dedup can recognize its own history without claiming comments from
+            // other github-actions workflows (Codex on #38). Legacy comments posted before
+            // the marker existed are recognized by the [P1]/[P2]/[P3] severity prefix the
+            // review policy has always mandated.
+            const OCR_MARKER = '<!-- opencodereview -->';
 
             let result;
             try {
@@ -383,8 +408,38 @@ jobs:
               commitSha = pullRequest.head.sha;
             }
 
+            // Ranges of the bot's existing inline comments, for positional dedup. Replies
+            // and outdated comments count too: a re-raise on a thread the author already
+            // disposed of is exactly the noise this suppresses. Failure here is non-fatal —
+            // the fallback is "post everything", never "drop findings".
+            let historyRanges = [];
+            try {
+              const existing = await github.paginate(github.rest.pulls.listReviewComments, {
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                pull_number: prNumber,
+                per_page: 100
+              });
+              historyRanges = existing
+                .filter(c => c.user && c.user.login === 'github-actions[bot]'
+                  && (String(c.body || '').includes(OCR_MARKER) || /^\s*\[P[1-3]\]/.test(c.body || '')))
+                .map(c => {
+                  const end = c.line != null ? c.line : c.original_line;
+                  if (end == null) return null;
+                  const start = c.start_line != null ? c.start_line
+                    : (c.original_start_line != null ? c.original_start_line : end);
+                  return { path: c.path, start, end };
+                })
+                .filter(Boolean);
+              console.log(`Loaded ${historyRanges.length} existing bot inline-comment range(s) for dedup.`);
+            } catch (e) {
+              console.log('Could not list existing review comments; skipping cross-run dedup:', e.message);
+            }
+
             const reviewComments = [];
             const commentsWithoutLine = [];
+            const acceptedRanges = [];
+            let suppressedCount = 0;
 
             for (const comment of comments) {
               const body = formatComment(comment);
@@ -394,6 +449,16 @@ jobs:
                 commentsWithoutLine.push({ comment, body });
                 continue;
               }
+
+              const range = commentRange(comment);
+              const dup = historyRanges.find(r => rangesOverlap(r, range))
+                || acceptedRanges.find(r => rangesOverlap(r, range));
+              if (dup) {
+                suppressedCount++;
+                console.log(`Suppressing duplicate at ${range.path}:${range.start}-${range.end} (overlaps existing ${dup.path}:${dup.start}-${dup.end}).`);
+                continue;
+              }
+              acceptedRanges.push(range);
 
               const reviewComment = {
                 path: comment.path,
@@ -416,10 +481,15 @@ jobs:
               reviewComments.push({ comment, reviewComment });
             }
 
+            if (reviewComments.length === 0 && commentsWithoutLine.length === 0) {
+              console.log(`All ${suppressedCount} comment(s) suppressed as duplicates of existing review comments; posting nothing.`);
+              return;
+            }
+
             const totalCount = comments.length;
             const inlineCount = reviewComments.length;
             const summaryCount = commentsWithoutLine.length;
-            let summaryBody = buildSummaryBody(totalCount, inlineCount, summaryCount, warnings);
+            let summaryBody = buildSummaryBody(totalCount, inlineCount, summaryCount, warnings, suppressedCount);
 
             summaryBody += formatSummaryComments(commentsWithoutLine);
 
@@ -508,7 +578,7 @@ jobs:
                 }
               }
 
-              let finalBody = buildSummaryBody(totalCount, successCount, commentsWithoutLine.length + failedComments.length, warnings);
+              let finalBody = buildSummaryBody(totalCount, successCount, commentsWithoutLine.length + failedComments.length, warnings, suppressedCount);
               finalBody += formatSummaryComments(commentsWithoutLine);
               finalBody += `\n\n---\n\n📊 **Posting Statistics:**`;
               finalBody += `\n- ✅ Successfully posted: ${successCount} comment(s)`;
@@ -534,6 +604,33 @@ jobs:
 
             function sleep(ms) {
               return new Promise(resolve => setTimeout(resolve, ms));
+            }
+
+            // Mirrors the multi-line-vs-single-line decision the posting code makes below,
+            // so a comment is deduplicated against exactly the range it would occupy.
+            function commentRange(comment) {
+              const end = comment.end_line >= 1 ? comment.end_line : comment.start_line;
+              const start = (comment.start_line >= 1 && comment.end_line >= 1 && comment.start_line !== comment.end_line)
+                ? comment.start_line
+                : end;
+              return { path: comment.path, start, end };
+            }
+
+            // Upstream bundled-action `incremental` semantics: same line for two
+            // single-line comments; IoU >= 0.6 for two multi-line comments; a single-line
+            // and a multi-line comment never match.
+            function rangesOverlap(a, b) {
+              if (a.path !== b.path) return false;
+              const aSingle = a.start === a.end;
+              const bSingle = b.start === b.end;
+              if (aSingle !== bSingle) return false;
+              if (aSingle) return a.start === b.start;
+              const interStart = Math.max(a.start, b.start);
+              const interEnd = Math.min(a.end, b.end);
+              const inter = Math.max(0, interEnd - interStart + 1);
+              if (inter === 0) return false;
+              const union = (a.end - a.start + 1) + (b.end - b.start + 1) - inter;
+              return inter / union >= 0.6;
             }
 
             function getHeader(headers, name) {
@@ -625,7 +722,7 @@ jobs:
                 body += fencedBlock(comment.suggestion_code, 'suggestion');
               }
 
-              return body;
+              return body + '\n\n' + OCR_MARKER;
             }
 
             function formatCommentMarkdown(comment, error) {
@@ -649,11 +746,14 @@ jobs:
               return md;
             }
 
-            function buildSummaryBody(totalCount, inlineCount, summaryCount, warnings) {
+            function buildSummaryBody(totalCount, inlineCount, summaryCount, warnings, suppressedCount) {
               let body = `🔍 **OpenCodeReview** found **${totalCount}** issue(s) in this PR.`;
               if (totalCount > 0) {
                 body += `\n- ✅ ${inlineCount} posted as inline comment(s)`;
                 body += `\n- 📝 ${summaryCount} posted as summary`;
+                if (suppressedCount > 0) {
+                  body += `\n- 🔁 ${suppressedCount} suppressed as duplicate(s) of existing review comments`;
+                }
               }
               if (warnings.length > 0) {
                 body += `\n\n⚠️ ${warnings.length} warning(s) occurred during review.`;
