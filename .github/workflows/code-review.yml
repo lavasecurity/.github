@@ -164,34 +164,91 @@ jobs:
           ocr config set llm.model "$OCR_LLM_MODEL"
           ocr config set llm.use_anthropic "$OCR_USE_ANTHROPIC"
 
-      # OCR ranks findings internally (high/medium/low) but never puts that label in the
-      # posted comment. Drop an org-default rule into the checked-out caller repo so every
-      # finding is prefixed with a [P1]/[P2]/[P3] severity tag (which the post step renders
-      # verbatim from `content`) AND the reviewer stays focused on functional issues over
-      # cosmetic/test-scaffolding nits (calibrated from lavasec-ios PR #43/#44 review volume).
-      # Skip if the caller ships its own .opencodereview/rule.json
-      # so we never clobber a repo's intentional customization. Written to the workspace,
-      # not committed; it does not affect the reviewed diff (origin/base..head).
-      - name: Add severity-labeling review rule
+      # Org-default review policy, dropped into the checked-out caller repo. The rule entry
+      # deliberately OMITS merge_system_rule: with it absent the policy text fully REPLACES
+      # OCR's built-in per-language checklist instead of being appended to it. The previous
+      # merge_system_rule:true form kept the built-in checklist alongside our focus text, and
+      # the two contradict — the built-in generic checklist (which every .swift file resolves
+      # to; OCR has no Swift-specific entry) mandates "Test Coverage" review, which drove the
+      # test-strictness comment flood the focus text tried to ban. Audit of the 163 OCR
+      # comments on lavasec-ios #69/#70: 8% signal, 60% noise; 51% of comments hinged on
+      # hypothetical future edits, 43% were test-strictness ratchets, and 28% of #69's volume
+      # was cross-round re-raises. The policy below targets each measured failure mode; the
+      # per-FILE comment cap is per-file because OCR reviews file-by-file, so a per-review cap
+      # is unenforceable from the checklist.
+      # The policy lives in a sibling .md the rule points at (OCR resolves a single-line,
+      # no-spaces .md rule value as a file path vs the repo root) so it stays readable here.
+      # Skip if the caller ships its own .opencodereview/rule.json so we never clobber a
+      # repo's intentional customization. Written to the workspace, not committed; it does
+      # not affect the reviewed diff (origin/base..head).
+      - name: Add precision-first review rule
         run: |
           if [ -f .opencodereview/rule.json ]; then
             echo ".opencodereview/rule.json already present in caller repo; leaving it untouched."
             exit 0
           fi
           mkdir -p .opencodereview
+          cat > .opencodereview/review-policy.md <<'POLICY'
+          You are reviewing a diff for defects. Optimize for precision, not recall: a false
+          alarm costs more reviewer trust than a missed minor issue. If you are not confident
+          an issue is real and worth a maintainer's time, do not comment. Prefer zero
+          comments over marginal ones.
+
+          Report ONLY:
+          - Correctness or logic errors, security flaws, data loss, crashes, resource or
+            lifecycle leaks, concurrency races, unhandled errors, and API misuse - each with
+            a concrete failure scenario reachable with the code and constant values AS
+            WRITTEN in this diff.
+          - In test files: ONLY a test that cannot fail for the behavior it claims to verify
+            (vacuous assertion, wrong symbol or file, or a regression it could never catch).
+            A test that verifies its claim but could be stricter, more symmetric, more
+            local, or better anchored is NOT a finding.
+
+          Never report:
+          - Hypothetical-future issues: anything that only becomes a defect if constants,
+            callers, or structure change later ("if a future refactor...", "a future caller
+            might..."). If the failure requires an edit that is not in this diff, do not
+            post it.
+          - Documented tradeoffs: if a nearby comment, docstring, or the diff itself
+            acknowledges the limitation or residual as accepted, it is a decision, not a
+            defect - do not re-litigate it.
+          - Cosmetics: formatting, naming, imports, comment or documentation wording or
+            accuracy, structure preferences, consistency-with-sibling nits, micro-
+            performance without measurable impact, missing validation for inputs no current
+            caller produces, or suggestions to add comments, docs, or tests.
+          - Unverified premises: before claiming a race or lifecycle bug, confirm the
+            execution context (actor isolation, queue, caller guards) from the source you
+            can see. If the premise depends on context you did not confirm, do not post.
+
+          Severity, as the first characters of every comment:
+          - [P1] a live defect a user can hit in the shipped product (data loss, security,
+            crash, wrong behavior).
+          - [P2] a real correctness risk in the code as written, or a genuinely vacuous test.
+          - [P3] rare: a minor but concretely actionable defect. Never [P3] for style or
+            "could be stricter".
+          Never emit a finding without a severity tag.
+
+          Limits: at most 2 comments per file - if you have more candidates, post only the
+          most severe and silently drop the rest. One comment per root cause (name other
+          affected sites within it; never post near-duplicates). At most 4 sentences per
+          comment: the defect, the concrete failure scenario, the fix. Do not restate the
+          code's own comments, narrate your analysis, or post observations that conclude no
+          change is needed - if no change is needed, post nothing.
+          POLICY
           cat > .opencodereview/rule.json <<'JSON'
           {
             "rules": [
               {
                 "path": "**/*",
-                "merge_system_rule": true,
-                "rule": "Severity tag (required): begin every review comment with exactly one severity tag as its first characters - [P1], [P2], or [P3]. Use [P1] for high-severity issues (bugs, security flaws, data loss, or clear mistakes with a precise fix), [P2] for medium-severity issues (likely bugs, context-dependent correctness risks, or significant maintainability/performance concerns), and [P3] for low-severity issues (minor problems, style, and nitpicks). Never emit a finding without a severity tag. Focus (required): prioritize FUNCTIONAL problems - correctness and logic errors, security flaws, data loss, concurrency and race conditions, unhandled errors and edge cases, resource and lifecycle leaks, API misuse, and crash risks; these are the point of the review. Do NOT raise purely COSMETIC issues - code formatting, naming preferences, comment or documentation wording or density, import ordering, or cross-file style 'consistency' such as matching formatter or encoder options - unless they cause a functional problem. In test files, only flag a test that fails to verify the behavior it claims (an assertion that passes vacuously, targets the wrong symbol or file, or cannot catch a real regression); do NOT comment on test naming, orphaned comments, harmless duplicate assertions, or other test scaffolding style. Be selective: prefer no comment over a marginal one, do not exhaustively enumerate minor nits, and reserve [P3] for the few genuinely actionable minor issues. When unsure whether something is worth raising, omit it."
+                "rule": ".opencodereview/review-policy.md"
               }
             ]
           }
           JSON
           echo "Wrote .opencodereview/rule.json:"
           cat .opencodereview/rule.json
+          echo "Wrote .opencodereview/review-policy.md:"
+          cat .opencodereview/review-policy.md
 
       - name: Run OpenCodeReview
         id: review
