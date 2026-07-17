@@ -330,8 +330,12 @@ jobs:
           cat /tmp/ocr-stderr.log
 
       # Posts OCR's findings as one PR review with inline comments. Before posting, new
-      # inline comments are deduplicated POSITIONALLY (path + line-range) against the bot's
-      # existing inline comments on the PR: OCR itself never reads PR state, so every
+      # inline comments are deduplicated POSITIONALLY (path + line-range) against THIS
+      # WORKFLOW'S existing inline comments on the PR — recognized by a hidden provenance
+      # marker stamped on every comment we post (legacy pre-marker comments by their
+      # mandated [P1-3] prefix), NOT by the shared github-actions[bot] login alone, so
+      # other workflows' comments never suppress a finding: OCR itself never reads PR
+      # state, so every
       # synchronize re-review re-raised prior findings — 28% of the 113-comment volume on
       # lavasec-ios#69 was cross-round re-raises. Semantics mirror upstream's bundled-action
       # `incremental` mode: two single-line comments match on the same line, two multi-line
@@ -350,6 +354,13 @@ jobs:
           script: |
             const fs = require('fs');
             const path = '/tmp/ocr-result.json';
+
+            // Provenance stamp appended (invisibly) to every inline comment this workflow
+            // posts, so dedup can recognize its own history without claiming comments from
+            // other github-actions workflows (Codex on #38). Legacy comments posted before
+            // the marker existed are recognized by the [P1]/[P2]/[P3] severity prefix the
+            // review policy has always mandated.
+            const OCR_MARKER = '<!-- opencodereview -->';
 
             let result;
             try {
@@ -410,7 +421,8 @@ jobs:
                 per_page: 100
               });
               historyRanges = existing
-                .filter(c => c.user && c.user.login === 'github-actions[bot]')
+                .filter(c => c.user && c.user.login === 'github-actions[bot]'
+                  && (String(c.body || '').includes(OCR_MARKER) || /^\s*\[P[1-3]\]/.test(c.body || '')))
                 .map(c => {
                   const end = c.line != null ? c.line : c.original_line;
                   if (end == null) return null;
@@ -710,7 +722,7 @@ jobs:
                 body += fencedBlock(comment.suggestion_code, 'suggestion');
               }
 
-              return body;
+              return body + '\n\n' + OCR_MARKER;
             }
 
             function formatCommentMarkdown(comment, error) {
