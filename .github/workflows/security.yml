@@ -134,7 +134,11 @@ jobs:
         # Scan the full commit HISTORY (git mode), not just the checked-out tree. A secret
         # added in one commit and removed before the final tree still lives in history and is
         # exposed if/when the repo goes public, so --no-git (directory mode) would miss exactly
-        # the leak this backstop must catch. Requires fetch-depth: 0 above. GIT_CONFIG
+        # the leak this backstop must catch. Explicit HEAD includes every ancestor of
+        # the reviewed merge/push commit, but excludes unrelated fetched branches.
+        # Gitleaks otherwise defaults to --all, letting any unmerged branch break
+        # every PR (including a prerequisite that approves a public checksum).
+        # Requires fetch-depth: 0 above. GIT_CONFIG
         # safe.directory avoids git's "dubious ownership" error for the host-mounted repo.
         run: |
           docker run --rm \
@@ -145,7 +149,7 @@ jobs:
             -e GIT_CONFIG_VALUE_0=/repo \
             "$GITLEAKS_IMAGE" \
             detect --source=/repo --config=/gitleaks-config/.gitleaks.toml \
-            --no-banner --redact --exit-code=1
+            --log-opts=HEAD --no-banner --redact --exit-code=1
 
   semgrep:
     if: ${{ inputs.semgrep }}
