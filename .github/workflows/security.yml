@@ -9,7 +9,7 @@ name: Security
 #   on: { push: { branches: [main] }, pull_request: {} }
 #   jobs:
 #     security:
-#       uses: lavasecurity/.github/.github/workflows/security.yml@main
+#       uses: lavasecurity/.github/.github/workflows/security.yml@bbba4b6150d8b2674453e8fe47a835fd423b6b4c
 #       with: { gitleaks: true, semgrep: true }
 #
 # Mobile callers that want mobsfscan findings in code scanning must ALSO grant the token
@@ -18,7 +18,7 @@ name: Security
 #   jobs:
 #     security:
 #       permissions: { contents: read, security-events: write }
-#       uses: lavasecurity/.github/.github/workflows/security.yml@main
+#       uses: lavasecurity/.github/.github/workflows/security.yml@bbba4b6150d8b2674453e8fe47a835fd423b6b4c
 #       with: { gitleaks: true, mobsfscan: true }
 
 on:

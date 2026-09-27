@@ -6,11 +6,7 @@ name: Security
 # calling its own reusable security.yml. The reusable workflow only triggers on
 # workflow_call, so there is no recursion.
 #
-# This references @main rather than a local ./ path deliberately: a local reusable-workflow
-# reference here produced a startup_failure (0 jobs) on pull_request — the very 0-job
-# outcome this backstop exists to prevent. @main runs reliably. The reusable workflow's own
-# syntax is still linted by the actionlint job on every run, and the consuming-repo PRs
-# exercise its interface end-to-end.
+# Pin the Ubicloud-only reusable workflow commit so this PR also honors runner policy.
 on:
   push:
     branches: [main]
@@ -18,7 +14,7 @@ on:
 
 jobs:
   security:
-    uses: lavasecurity/.github/.github/workflows/security.yml@main
+    uses: lavasecurity/.github/.github/workflows/security.yml@bbba4b6150d8b2674453e8fe47a835fd423b6b4c
     with:
       gitleaks: true
       actionlint: true
