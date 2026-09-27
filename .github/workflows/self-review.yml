@@ -2,7 +2,7 @@ name: Code Review
 
 # lavasecurity/.github reviews its own pull requests with the reusable AI code-review
 # workflow it hosts. Named self-review.yml because code-review.yml is the reusable
-# workflow itself. References @main — a normal caller of a same-repo reusable workflow;
+# workflow itself. References a reviewed SHA — a normal caller of a same-repo reusable workflow;
 # the reusable only triggers on workflow_call, so there is no recursion. This repo is
 # public, so the reusable's public-only guard passes. Requires the repo secret
 # OCR_LLM_AUTH_TOKEN (the OpenCode Go API key).

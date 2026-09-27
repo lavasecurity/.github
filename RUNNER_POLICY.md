@@ -18,3 +18,16 @@ configuration lists the permitted Ubicloud labels.
 
 Old runner-selection variables are no longer read. Historical cost plans describing
 GitHub-hosted fallback routes are superseded by this policy.
+
+## Shared workflow rollout
+
+Merge the initial runner-policy PR with a merge commit (not squash/rebase), so its
+pinned `bbba4b6150d8b2674453e8fe47a835fd423b6b4c` revision remains reachable from
+`main`. Keep the source branch until that merge completes. Subsequent policy
+updates must use a reviewed, reachable immutable revision in every caller.
+
+Public and fork Linux jobs intentionally use managed Ubicloud's disposable VMs.
+[Ubicloud documents one clean VM and JIT runner per job](https://www.ubicloud.com/docs/github-actions-integration/security),
+with the VM and disk removed afterward. This policy does not permit a persistent
+Linux host behind an Ubicloud label. Fork runs retain read-only tokens and no
+release credentials; privileged code review still rejects fork heads before use.
