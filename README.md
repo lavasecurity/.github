@@ -52,7 +52,7 @@ on:
   pull_request: {}
 jobs:
   security:
-    uses: lavasecurity/.github/.github/workflows/security.yml@bbba4b6150d8b2674453e8fe47a835fd423b6b4c
+    uses: lavasecurity/.github/.github/workflows/security.yml@main
     with:
       gitleaks: true
       semgrep: true   # only on JS/TS app repos
@@ -73,7 +73,7 @@ jobs:
     permissions:
       contents: read
       security-events: write
-    uses: lavasecurity/.github/.github/workflows/security.yml@bbba4b6150d8b2674453e8fe47a835fd423b6b4c
+    uses: lavasecurity/.github/.github/workflows/security.yml@main
     with:
       gitleaks: true
       mobsfscan: true
@@ -85,9 +85,9 @@ and on fork PRs (read-only token), so the grant is a harmless no-op there.
 ### Notes
 
 - **This repo scans itself** via [`self-scan.yml`](.github/workflows/self-scan.yml),
-  a caller pinned to the Ubicloud-only security workflow commit, with `gitleaks`
-  and `actionlint`. Full repository references avoid the historical startup failure
-  seen with local reusable workflow references. See [runner policy](RUNNER_POLICY.md).
+  a caller of `security.yml@main` with `gitleaks` + `actionlint`. It references `@main`
+  rather than a local `./` path on purpose: a local reusable reference here produced a
+  zero-job `startup_failure`, whereas `@main` runs reliably.
 - **Dependency updates are not centralizable** via `workflow_call`; each repo commits
   its own `.github/dependabot.yml` (templated, not shared).
 - Per-repo **build/test gates** (e.g. `swift test`, `mkdocs build --strict`,
