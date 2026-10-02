@@ -25,6 +25,24 @@ test('review budgets stay bounded and allow full source syncs and on-demand revi
   }
 });
 
+test('only explicitly public repositories default to the free model', () => {
+  const raw = workflow.match(/^          OCR_LLM_MODEL: (.+)$/m)[1].trim();
+  const evaluate = new Function('inputs', 'github', 'toJSON',
+    `return (${raw.replace(/^\$\{\{\s*|\s*\}\}$/g, '')});`);
+  const defaultModel = workflow.split('      llm_model:\n')[1].split('      use_anthropic:\n')[0]
+    .match(/        default: "(.*)"/)[1];
+  for (const [privateFlag, expected] of [
+    [false, 'longcat-2.5-preview-free'], [true, 'glm-5.3-flash'],
+    [undefined, 'glm-5.3-flash'], [null, 'glm-5.3-flash'],
+    ['false', 'glm-5.3-flash'], [0, 'glm-5.3-flash'],
+  ]) {
+    for (const override of ['', 'explicit-provider-model']) {
+      assert.equal(evaluate({llm_model:override || defaultModel}, {event:{repository:{private:privateFlag}}},
+        value => value === undefined ? 'null' : JSON.stringify(value)), override || expected);
+    }
+  }
+});
+
 test('review progress reaches the job log before the result completes', async () => {
   const dir = mkdtempSync(join(tmpdir(), 'ocr-progress-'));
   try {

@@ -30,15 +30,15 @@ on:
   workflow_call:
     inputs:
       llm_url:
-        description: "LLM endpoint. Defaults to OpenCode Go's Chat Completions API for GLM-5.3-Flash. Overrides must match llm_model, use_anthropic, and the API key."
+        description: "LLM endpoint. Defaults to OpenCode Go's Chat Completions API. Overrides must match llm_model, use_anthropic, and the API key."
         type: string
         default: "https://opencode.ai/zen/go/v1"
       llm_model:
-        description: "Model to review with. Defaults to GLM-5.3-Flash on OpenCode Go. Use the bare API model id (glm-5.3-flash), not the opencode-go/ config prefix."
+        description: "Model to review with. Empty selects LongCat's free preview for public repositories and GLM-5.3-Flash for private repositories. Use a bare API model id, not the opencode-go/ config prefix."
         type: string
-        default: "glm-5.3-flash"
+        default: ""
       use_anthropic:
-        description: "Speak the Anthropic protocol. False for the default GLM Chat Completions API; set true with an Anthropic Messages endpoint, such as Go's MiniMax models."
+        description: "Speak the Anthropic protocol. False for the default Chat Completions models; set true with an Anthropic Messages endpoint, such as Go's MiniMax models."
         type: boolean
         default: false
       ocr_version:
@@ -158,7 +158,9 @@ jobs:
       - name: Configure OCR
         env:
           OCR_LLM_URL: ${{ inputs.llm_url }}
-          OCR_LLM_MODEL: ${{ inputs.llm_model }}
+          # Only an explicit public flag selects the free preview. Missing visibility
+          # stays on the private default; toJSON avoids null == false coercion.
+          OCR_LLM_MODEL: ${{ inputs.llm_model || (toJSON(github.event.repository.private) == 'false' && 'longcat-2.5-preview-free' || 'glm-5.3-flash') }}
           OCR_USE_ANTHROPIC: ${{ inputs.use_anthropic }}
           OCR_LLM_AUTH_TOKEN: ${{ secrets.llm_auth_token }}
         run: |
