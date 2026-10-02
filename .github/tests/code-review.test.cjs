@@ -58,17 +58,22 @@ test('Go gets OCR conversation affinity; other providers keep their headers', ()
   try {
     const bin = join(dir, 'ocr');
     writeFileSync(bin, '#!/usr/bin/env node\nrequire("node:fs").appendFileSync(process.env.OCR_CAPTURE, JSON.stringify(process.argv.slice(2))+"\\n");\n', { mode: 0o755 });
-    for (const url of ['https://opencode.ai/zen/go/v1', 'https://opencode.ai/zen/go/v1/', 'https://example.com/v1']) {
+    for (const [url, protocol] of [
+      ['https://opencode.ai/zen/go/v1', 'false'], ['https://opencode.ai/zen/go/v1/', 'false'],
+      ['https://opencode.ai/zen/go/v1/messages', 'true'], ['https://opencode.ai/zen/go/v1/messages/', 'true'],
+      ['https://example.com/v1', 'false'], ['https://example.com/v1/messages', 'true'],
+    ]) {
       const capture = join(dir, encodeURIComponent(url));
       const result = spawnSync('bash', ['-e', '-c', stepBody('Configure OCR', 'run')], {
         env: { ...process.env, PATH: `${dir}:${process.env.PATH}`, OCR_CAPTURE: capture,
-          OCR_LLM_URL: url, OCR_LLM_MODEL: 'minimax-m3', OCR_LLM_AUTH_TOKEN: 'synthetic', OCR_USE_ANTHROPIC: 'false' }
+          OCR_LLM_URL: url, OCR_LLM_MODEL: 'minimax-m3', OCR_LLM_AUTH_TOKEN: 'synthetic', OCR_USE_ANTHROPIC: protocol }
       });
       assert.equal(result.status, 0, result.stderr.toString());
       const calls = readFileSync(capture, 'utf8').trim().split('\n').map(JSON.parse);
       const headers = calls.filter(call => call[2] === 'llm.extra_headers');
       assert.deepEqual(headers, url.startsWith('https://opencode.ai/')
         ? [['config', 'set', 'llm.extra_headers', 'x-opencode-session={ocr_session_key}']] : []);
+      assert.deepEqual(calls.filter(call => call[2] === 'llm.use_anthropic'), [['config','set','llm.use_anthropic',protocol]]);
     }
   } finally { rmSync(dir, { recursive: true }); }
 });

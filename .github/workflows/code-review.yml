@@ -30,17 +30,17 @@ on:
   workflow_call:
     inputs:
       llm_url:
-        description: "LLM endpoint. Defaults to the OpenCode Go plan's OpenAI-compatible API. Override (with a matching llm_model + key) to point at another provider."
+        description: "LLM endpoint. Defaults to MiniMax M3's Anthropic Messages endpoint on OpenCode Go. Overrides must match llm_model, use_anthropic, and the API key."
         type: string
-        default: "https://opencode.ai/zen/go/v1"
+        default: "https://opencode.ai/zen/go/v1/messages"
       llm_model:
-        description: "Model to review with. Defaults to MiniMax M3 on the OpenCode Go plan. This is the bare API model id (minimax-m3), NOT the opencode-go/ config-prefixed form — OCR sends it verbatim to the OpenAI-compatible /chat/completions endpoint, which rejects the prefixed slug."
+        description: "Model to review with. Defaults to MiniMax M3 on OpenCode Go. Use the bare API model id (minimax-m3), not the opencode-go/ config prefix."
         type: string
         default: "minimax-m3"
       use_anthropic:
-        description: "Speak the Anthropic protocol. False for the OpenCode Go plan (OpenAI-compatible); true for e.g. z.ai's /api/anthropic endpoint."
+        description: "Speak the Anthropic protocol, as required by the default MiniMax M3 endpoint. Set false for an OpenAI Chat Completions endpoint."
         type: boolean
-        default: false
+        default: true
       ocr_version:
         description: "Pin @alibaba-group/open-code-review to a version. Empty = latest."
         type: string
@@ -169,10 +169,11 @@ jobs:
           # Go requires a stable conversation identity for routing and prompt caching.
           # OCR expands its native key per conversation, including grouping and planning.
           # Scope this provider-specific header to Go; other endpoints keep their defaults.
-          if [ "$OCR_LLM_URL" = "https://opencode.ai/zen/go/v1" ] || \
-             [ "$OCR_LLM_URL" = "https://opencode.ai/zen/go/v1/" ]; then
-            ocr config set llm.extra_headers 'x-opencode-session={ocr_session_key}'
-          fi
+          case "$OCR_LLM_URL" in
+            https://opencode.ai/zen/go/v1|https://opencode.ai/zen/go/v1/|https://opencode.ai/zen/go/v1/messages|https://opencode.ai/zen/go/v1/messages/)
+              ocr config set llm.extra_headers 'x-opencode-session={ocr_session_key}'
+              ;;
+          esac
 
       # Org-default review policy, dropped into the checked-out caller repo. The rule entry
       # deliberately OMITS merge_system_rule: with it absent the policy text fully REPLACES
