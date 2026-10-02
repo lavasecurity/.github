@@ -163,6 +163,13 @@ jobs:
           ocr config set llm.auth_token "$OCR_LLM_AUTH_TOKEN"
           ocr config set llm.model "$OCR_LLM_MODEL"
           ocr config set llm.use_anthropic "$OCR_USE_ANTHROPIC"
+          # Go requires a stable conversation identity for routing and prompt caching.
+          # OCR expands its native key per conversation, including grouping and planning.
+          # Scope this provider-specific header to Go; other endpoints keep their defaults.
+          if [ "$OCR_LLM_URL" = "https://opencode.ai/zen/go/v1" ] || \
+             [ "$OCR_LLM_URL" = "https://opencode.ai/zen/go/v1/" ]; then
+            ocr config set llm.extra_headers 'x-opencode-session={ocr_session_key}'
+          fi
 
       # Org-default review policy, dropped into the checked-out caller repo. The rule entry
       # deliberately OMITS merge_system_rule: with it absent the policy text fully REPLACES
@@ -367,7 +374,7 @@ jobs:
               const raw = fs.readFileSync(path, 'utf8');
               result = JSON.parse(raw);
             } catch (e) {
-              console.log('Failed to parse OCR output:', e.message);
+              core.setFailed(`Failed to parse OCR output: ${e.message}`);
               const stderr = fs.readFileSync('/tmp/ocr-stderr.log', 'utf8').trim();
               if (stderr) {
                 await github.rest.issues.createComment({
@@ -377,6 +384,18 @@ jobs:
                   body: `⚠️ **OpenCodeReview** encountered an error:\n${fencedBlock(stderr)}`
                 });
               }
+              return;
+            }
+
+            if (result.status === 'failed') {
+              const message = result.message || 'Review failed before it completed.';
+              core.setFailed(message);
+              await github.rest.issues.createComment({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                issue_number: context.issue.number,
+                body: `⚠️ **OpenCodeReview**: ${message}`
+              });
               return;
             }
 
