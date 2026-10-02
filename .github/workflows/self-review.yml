@@ -19,8 +19,9 @@ jobs:
       pull-requests: write
     uses: lavasecurity/.github/.github/workflows/code-review.yml@main
     with:
-      llm_url: https://opencode.ai/zen/go/v1
-      llm_model: glm-5.3-flash
+      # This public repository can use Go's free model while paid requests time out.
+      # The credential destination remains defined by the trusted reusable workflow.
+      llm_model: longcat-2.5-preview-free
       use_anthropic: false
     secrets:
       llm_auth_token: ${{ secrets.OCR_LLM_AUTH_TOKEN }}
