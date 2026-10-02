@@ -74,6 +74,8 @@ test('Go gets OCR conversation affinity; other providers keep their headers', ()
       assert.deepEqual(headers, url.startsWith('https://opencode.ai/')
         ? [['config', 'set', 'llm.extra_headers', 'x-opencode-session={ocr_session_key}']] : []);
       assert.deepEqual(calls.filter(call => call[2] === 'llm.use_anthropic'), [['config','set','llm.use_anthropic',protocol]]);
+      assert.deepEqual(calls.filter(call => call[2] === 'llm.auth_header'), url.startsWith('https://opencode.ai/') && url.includes('/messages')
+        ? [['config','set','llm.auth_header','x-api-key']] : []);
     }
   } finally { rmSync(dir, { recursive: true }); }
 });

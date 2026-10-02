@@ -174,6 +174,13 @@ jobs:
               ocr config set llm.extra_headers 'x-opencode-session={ocr_session_key}'
               ;;
           esac
+          # Go's Messages endpoint expects the Anthropic API-key header. OCR's
+          # Anthropic client otherwise defaults to Bearer authentication.
+          case "$OCR_LLM_URL" in
+            https://opencode.ai/zen/go/v1/messages|https://opencode.ai/zen/go/v1/messages/)
+              ocr config set llm.auth_header 'x-api-key'
+              ;;
+          esac
 
       # Org-default review policy, dropped into the checked-out caller repo. The rule entry
       # deliberately OMITS merge_system_rule: with it absent the policy text fully REPLACES
