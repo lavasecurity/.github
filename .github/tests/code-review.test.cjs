@@ -29,11 +29,14 @@ test('review progress reaches the job log before the result completes', async ()
   const dir = mkdtempSync(join(tmpdir(), 'ocr-progress-'));
   try {
     writeFileSync(join(dir, 'ocr'), '#!/usr/bin/env node\nprocess.stderr.write("synthetic-review-progress\\n");setTimeout(()=>process.stdout.write(JSON.stringify({status:"success",comments:[]})),1000);\n', {mode:0o755});
+    // Stream immediately, but delay the saved diagnostic to expose a missing wait.
+    writeFileSync(join(dir, 'tee'), '#!/usr/bin/env node\nconst fs=require("node:fs");fs.writeFileSync(process.argv[2],"");let data="";process.stdin.on("data",part=>{data+=part;process.stdout.write(part);});process.stdin.on("end",()=>setTimeout(()=>fs.writeFileSync(process.argv[2],data),2000));\n', {mode:0o755});
     const resultPath = join(dir, 'result.json'), stderrPath = join(dir, 'stderr.log');
     const body = stepBody('Run OpenCodeReview', 'run')
-      .replaceAll('/tmp/ocr-result.json', resultPath).replaceAll('/tmp/ocr-stderr.log', stderrPath);
+      .replaceAll('/tmp/ocr-result.json', resultPath).replaceAll('/tmp/ocr-stderr.log', stderrPath)
+      + '\nnode -e \'require("node:assert/strict").match(require("node:fs").readFileSync(process.env.OCR_TEST_STDERR,"utf8"),/synthetic-review-progress/);\'';
     const child = spawn('bash', ['-e', '-c', body], {
-      env:{...process.env,PATH:`${dir}:${process.env.PATH}`,EVENT_NAME:'pull_request',PR_ACTION:'opened',PR_BASE_REF:'main',PR_HEAD_SHA:'synthetic'}
+      env:{...process.env,PATH:`${dir}:${process.env.PATH}`,EVENT_NAME:'pull_request',PR_ACTION:'opened',PR_BASE_REF:'main',PR_HEAD_SHA:'synthetic',OCR_TEST_STDERR:stderrPath}
     });
     let progress = false, completedBeforeProgress = false, errors = '';
     child.stdout.resume();
@@ -75,7 +78,7 @@ test('Go gets OCR conversation affinity; other providers keep their headers', ()
         ? [['config', 'set', 'llm.extra_headers', 'x-opencode-session={ocr_session_key}']] : []);
       assert.deepEqual(calls.filter(call => call[2] === 'llm.use_anthropic'), [['config','set','llm.use_anthropic',protocol]]);
       assert.deepEqual(calls.filter(call => call[2] === 'llm.auth_header'), url.startsWith('https://opencode.ai/') && url.includes('/messages')
-        ? [['config','set','llm.auth_header','x-api-key']] : []);
+        ? [['config','set','llm.auth_header',''],['config','set','llm.auth_header','x-api-key']] : [['config','set','llm.auth_header','']]);
     }
   } finally { rmSync(dir, { recursive: true }); }
 });

@@ -30,15 +30,15 @@ on:
   workflow_call:
     inputs:
       llm_url:
-        description: "LLM endpoint. Defaults to OpenCode Go's Chat Completions API for DeepSeek V4.1 Flash. Overrides must match llm_model, use_anthropic, and the API key."
+        description: "LLM endpoint. Defaults to OpenCode Go's Chat Completions API for GLM-5.3-Flash. Overrides must match llm_model, use_anthropic, and the API key."
         type: string
         default: "https://opencode.ai/zen/go/v1"
       llm_model:
-        description: "Model to review with. Defaults to DeepSeek V4.1 Flash on OpenCode Go. Use the bare API model id (deepseek-v4.1-flash), not the opencode-go/ config prefix."
+        description: "Model to review with. Defaults to GLM-5.3-Flash on OpenCode Go. Use the bare API model id (glm-5.3-flash), not the opencode-go/ config prefix."
         type: string
-        default: "deepseek-v4.1-flash"
+        default: "glm-5.3-flash"
       use_anthropic:
-        description: "Speak the Anthropic protocol. False for the default DeepSeek Chat Completions API; set true with an Anthropic Messages endpoint, such as Go's MiniMax models."
+        description: "Speak the Anthropic protocol. False for the default GLM Chat Completions API; set true with an Anthropic Messages endpoint, such as Go's MiniMax models."
         type: boolean
         default: false
       ocr_version:
@@ -166,6 +166,8 @@ jobs:
           ocr config set llm.auth_token "$OCR_LLM_AUTH_TOKEN"
           ocr config set llm.model "$OCR_LLM_MODEL"
           ocr config set llm.use_anthropic "$OCR_USE_ANTHROPIC"
+          # Reset per-run authentication on reused runners before provider overrides.
+          ocr config set llm.auth_header ''
           # Go requires a stable conversation identity for routing and prompt caching.
           # OCR expands its native key per conversation, including grouping and planning.
           # Scope this provider-specific header to Go; other endpoints keep their defaults.
@@ -337,11 +339,15 @@ jobs:
           fi
 
           echo "Reviewing ${HEAD_SHA} against ${FROM_REF}"
-          ocr review \
-            --from "${FROM_REF}" \
-            --to "${HEAD_SHA}" \
-            --format json \
-            > /tmp/ocr-result.json 2> >(tee /tmp/ocr-stderr.log >&2) || true
+          # A foreground pipeline waits for tee to flush before the dependent
+          # posting step reads diagnostics, while still streaming progress live.
+          {
+            ocr review \
+              --from "${FROM_REF}" \
+              --to "${HEAD_SHA}" \
+              --format json \
+              > /tmp/ocr-result.json || true
+          } 2>&1 | tee /tmp/ocr-stderr.log >&2
           echo "=== OCR output ==="
           cat /tmp/ocr-result.json
           # Progress was streamed live; retain the same file for failure diagnostics.

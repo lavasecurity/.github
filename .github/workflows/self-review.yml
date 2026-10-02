@@ -2,9 +2,9 @@ name: Code Review
 
 # lavasecurity/.github reviews its own pull requests with the reusable AI code-review
 # workflow it hosts. Named self-review.yml because code-review.yml is the reusable
-# workflow itself. Use the same commit's workflow so fixes are exercised before merge;
-# the reusable only triggers on workflow_call, so there is no recursion. Its same-repo
-# and trusted-commenter gates still apply. Requires the repo secret
+# workflow itself. Keep the secret-bearing implementation on trusted main; PR changes
+# are exercised by local fixture tests. The reusable only triggers on workflow_call,
+# so there is no recursion. Requires the repo secret
 # OCR_LLM_AUTH_TOKEN (the OpenCode Go API key).
 on:
   pull_request:
@@ -17,6 +17,10 @@ jobs:
     permissions:
       contents: read
       pull-requests: write
-    uses: ./.github/workflows/code-review.yml
+    uses: lavasecurity/.github/.github/workflows/code-review.yml@main
+    with:
+      llm_url: https://opencode.ai/zen/go/v1
+      llm_model: glm-5.3-flash
+      use_anthropic: false
     secrets:
       llm_auth_token: ${{ secrets.OCR_LLM_AUTH_TOKEN }}
