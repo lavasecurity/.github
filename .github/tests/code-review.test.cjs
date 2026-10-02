@@ -63,3 +63,12 @@ test('completed empty review stays green', async () => {
   assert.deepEqual(result.failures, []);
   assert.match(result.calls[0], /^✅/);
 });
+
+test('partial reviews with failed coverage never claim green', async () => {
+  for (const status of ['partial', 'completed_with_errors', 'completed_with_warnings']) {
+    const result = await post(JSON.stringify({ status, comments: [], coverage: { failed: [{ path: 'unreviewed.swift' }] } }));
+    assert.equal(result.failures.length, 1);
+    assert.equal(result.calls.length, 1);
+    assert.match(result.calls[0], /^⚠️/);
+  }
+});

@@ -387,7 +387,11 @@ jobs:
               return;
             }
 
-            if (result.status === 'failed') {
+            const comments = result.comments || [];
+            const warnings = result.warnings || [];
+            const incomplete = ['failed', 'partial', 'completed_with_errors'].includes(result.status)
+              || (result.coverage?.failed?.length || 0) > 0;
+            if (incomplete) {
               const message = result.message || 'Review failed before it completed.';
               core.setFailed(message);
               await github.rest.issues.createComment({
@@ -396,11 +400,9 @@ jobs:
                 issue_number: context.issue.number,
                 body: `⚠️ **OpenCodeReview**: ${message}`
               });
-              return;
+              // Preserve real findings from partial reviews while keeping the check red.
+              if (comments.length === 0) return;
             }
-
-            const comments = result.comments || [];
-            const warnings = result.warnings || [];
 
             if (comments.length === 0) {
               const message = result.message || 'No comments generated. Looks good to me.';
