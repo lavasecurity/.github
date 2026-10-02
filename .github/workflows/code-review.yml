@@ -30,17 +30,17 @@ on:
   workflow_call:
     inputs:
       llm_url:
-        description: "LLM endpoint. Defaults to MiniMax M3's Anthropic Messages endpoint on OpenCode Go. Overrides must match llm_model, use_anthropic, and the API key."
+        description: "LLM endpoint. Defaults to OpenCode Go's Chat Completions API for DeepSeek V4.1 Flash. Overrides must match llm_model, use_anthropic, and the API key."
         type: string
-        default: "https://opencode.ai/zen/go/v1/messages"
+        default: "https://opencode.ai/zen/go/v1"
       llm_model:
-        description: "Model to review with. Defaults to MiniMax M3 on OpenCode Go. Use the bare API model id (minimax-m3), not the opencode-go/ config prefix."
+        description: "Model to review with. Defaults to DeepSeek V4.1 Flash on OpenCode Go. Use the bare API model id (deepseek-v4.1-flash), not the opencode-go/ config prefix."
         type: string
-        default: "minimax-m3"
+        default: "deepseek-v4.1-flash"
       use_anthropic:
-        description: "Speak the Anthropic protocol, as required by the default MiniMax M3 endpoint. Set false for an OpenAI Chat Completions endpoint."
+        description: "Speak the Anthropic protocol. False for the default DeepSeek Chat Completions API; set true with an Anthropic Messages endpoint, such as Go's MiniMax models."
         type: boolean
-        default: true
+        default: false
       ocr_version:
         description: "Pin @alibaba-group/open-code-review to a version. Empty = latest."
         type: string
