@@ -30,15 +30,15 @@ on:
   workflow_call:
     inputs:
       llm_url:
-        description: "LLM endpoint. Defaults to the OpenCode Go plan's OpenAI-compatible API. Override (with a matching llm_model + key) to point at another provider."
+        description: "LLM endpoint. Defaults to OpenCode Go's Chat Completions API. Overrides must match llm_model, use_anthropic, and the API key."
         type: string
         default: "https://opencode.ai/zen/go/v1"
       llm_model:
-        description: "Model to review with. Defaults to MiniMax M3 on the OpenCode Go plan. This is the bare API model id (minimax-m3), NOT the opencode-go/ config-prefixed form — OCR sends it verbatim to the OpenAI-compatible /chat/completions endpoint, which rejects the prefixed slug."
+        description: "Model to review with. Empty selects LongCat's free preview for public repositories and GLM-5.3-Flash for private repositories. Use a bare API model id, not the opencode-go/ config prefix."
         type: string
-        default: "minimax-m3"
+        default: ""
       use_anthropic:
-        description: "Speak the Anthropic protocol. False for the OpenCode Go plan (OpenAI-compatible); true for e.g. z.ai's /api/anthropic endpoint."
+        description: "Speak the Anthropic protocol. False for the default Chat Completions models; set true with an Anthropic Messages endpoint, such as Go's MiniMax models."
         type: boolean
         default: false
       ocr_version:
@@ -73,7 +73,10 @@ jobs:
     # context" step below, before any fork code is checked out with the review secrets (OCR #29).
     # See lavasec-infra plans/2026-07-08-linux-ci-runner-cost-plan.md.
     runs-on: ${{ (github.event.repository.private && (github.event_name != 'pull_request' || github.event.pull_request.head.repo.fork == false)) && fromJSON(vars.LINUX_CI_RUNNER || '["ubicloud-standard-2"]') || fromJSON('["ubuntu-latest"]') }}
-    timeout-minutes: 30  # cap so a hung/looping review can't hold a self-hosted (Ubicloud) worker (OCR #29)
+    # Keep the ordinary PR cap; full source syncs need enough time to review hundreds
+    # of files. On-demand payloads omit changed_files, so allow the same bounded full
+    # review budget there. Trigger/trust gates below still apply before any work.
+    timeout-minutes: ${{ (github.event_name == 'issue_comment' || github.event.pull_request.changed_files >= 500) && 90 || 30 }}
     # Runs for:
     #   * a same-repo PR (fork heads never receive the secret, so they'd fail
     #     the config/review/post steps on an empty token — skip them cleanly), or
@@ -155,7 +158,9 @@ jobs:
       - name: Configure OCR
         env:
           OCR_LLM_URL: ${{ inputs.llm_url }}
-          OCR_LLM_MODEL: ${{ inputs.llm_model }}
+          # Only an explicit public flag selects the free preview. Missing visibility
+          # stays on the private default; toJSON avoids null == false coercion.
+          OCR_LLM_MODEL: ${{ inputs.llm_model || (toJSON(github.event.repository.private) == 'false' && 'longcat-2.5-preview-free' || 'glm-5.3-flash') }}
           OCR_USE_ANTHROPIC: ${{ inputs.use_anthropic }}
           OCR_LLM_AUTH_TOKEN: ${{ secrets.llm_auth_token }}
         run: |
@@ -163,13 +168,23 @@ jobs:
           ocr config set llm.auth_token "$OCR_LLM_AUTH_TOKEN"
           ocr config set llm.model "$OCR_LLM_MODEL"
           ocr config set llm.use_anthropic "$OCR_USE_ANTHROPIC"
+          # Reset per-run authentication on reused runners before provider overrides.
+          ocr config set llm.auth_header ''
           # Go requires a stable conversation identity for routing and prompt caching.
           # OCR expands its native key per conversation, including grouping and planning.
           # Scope this provider-specific header to Go; other endpoints keep their defaults.
-          if [ "$OCR_LLM_URL" = "https://opencode.ai/zen/go/v1" ] || \
-             [ "$OCR_LLM_URL" = "https://opencode.ai/zen/go/v1/" ]; then
-            ocr config set llm.extra_headers 'x-opencode-session={ocr_session_key}'
-          fi
+          case "$OCR_LLM_URL" in
+            https://opencode.ai/zen/go/v1|https://opencode.ai/zen/go/v1/|https://opencode.ai/zen/go/v1/messages|https://opencode.ai/zen/go/v1/messages/)
+              ocr config set llm.extra_headers 'x-opencode-session={ocr_session_key}'
+              ;;
+          esac
+          # Go's Messages endpoint expects the Anthropic API-key header. OCR's
+          # Anthropic client otherwise defaults to Bearer authentication.
+          case "$OCR_LLM_URL" in
+            https://opencode.ai/zen/go/v1/messages|https://opencode.ai/zen/go/v1/messages/)
+              ocr config set llm.auth_header 'x-api-key'
+              ;;
+          esac
 
       # Org-default review policy, dropped into the checked-out caller repo. The rule entry
       # deliberately OMITS merge_system_rule: with it absent the policy text fully REPLACES
@@ -326,15 +341,18 @@ jobs:
           fi
 
           echo "Reviewing ${HEAD_SHA} against ${FROM_REF}"
-          ocr review \
-            --from "${FROM_REF}" \
-            --to "${HEAD_SHA}" \
-            --format json \
-            > /tmp/ocr-result.json 2>/tmp/ocr-stderr.log || true
+          # A foreground pipeline waits for tee to flush before the dependent
+          # posting step reads diagnostics, while still streaming progress live.
+          {
+            ocr review \
+              --from "${FROM_REF}" \
+              --to "${HEAD_SHA}" \
+              --format json \
+              > /tmp/ocr-result.json || true
+          } 2>&1 | tee /tmp/ocr-stderr.log >&2
           echo "=== OCR output ==="
           cat /tmp/ocr-result.json
-          echo "=== OCR stderr ==="
-          cat /tmp/ocr-stderr.log
+          # Progress was streamed live; retain the same file for failure diagnostics.
 
       # Posts OCR's findings as one PR review with inline comments. Before posting, new
       # inline comments are deduplicated POSITIONALLY (path + line-range) against THIS
