@@ -2,7 +2,7 @@ const assert = require('node:assert/strict');
 const { readFileSync, mkdtempSync, writeFileSync, rmSync } = require('node:fs');
 const { tmpdir } = require('node:os');
 const { join } = require('node:path');
-const { spawnSync } = require('node:child_process');
+const { spawnSync, spawn } = require('node:child_process');
 const test = require('node:test');
 
 const workflow = readFileSync(join(__dirname, '../workflows/code-review.yml'), 'utf8');
@@ -11,6 +11,47 @@ function stepBody(name, key) {
   const body = step.split(`        ${key}: |\n`)[1] || step.split(`          ${key}: |\n`)[1];
   return body.split('\n').filter(line => line.startsWith('          ')).map(line => line.replace(/^ {10,12}/, '')).join('\n');
 }
+
+test('review budgets stay bounded and allow full source syncs and on-demand reviews', () => {
+  const raw = workflow.match(/^    timeout-minutes: (.+)$/m)[1].split('  #')[0].trim();
+  const evaluate = /^\d+$/.test(raw) ? () => Number(raw)
+    : new Function('github', `return (${raw.replace(/^\$\{\{\s*|\s*\}\}$/g, '')});`);
+  for (const [event, files, minutes] of [
+    ['pull_request', undefined, 30], ['pull_request', 1, 30],
+    ['pull_request', 499, 30], ['pull_request', 500, 90],
+    ['pull_request', 1470, 90], ['issue_comment', undefined, 90],
+  ]) {
+    assert.equal(evaluate({event_name:event,event:{pull_request:{changed_files:files}}}), minutes, `${event}: ${files}`);
+  }
+});
+
+test('review progress reaches the job log before the result completes', async () => {
+  const dir = mkdtempSync(join(tmpdir(), 'ocr-progress-'));
+  try {
+    writeFileSync(join(dir, 'ocr'), '#!/usr/bin/env node\nprocess.stderr.write("synthetic-review-progress\\n");setTimeout(()=>process.stdout.write(JSON.stringify({status:"success",comments:[]})),1000);\n', {mode:0o755});
+    const resultPath = join(dir, 'result.json'), stderrPath = join(dir, 'stderr.log');
+    const body = stepBody('Run OpenCodeReview', 'run')
+      .replaceAll('/tmp/ocr-result.json', resultPath).replaceAll('/tmp/ocr-stderr.log', stderrPath);
+    const child = spawn('bash', ['-e', '-c', body], {
+      env:{...process.env,PATH:`${dir}:${process.env.PATH}`,EVENT_NAME:'pull_request',PR_ACTION:'opened',PR_BASE_REF:'main',PR_HEAD_SHA:'synthetic'}
+    });
+    let progress = false, completedBeforeProgress = false, errors = '';
+    child.stdout.resume();
+    child.stderr.on('data', chunk => {
+      errors += chunk;
+      if (!progress && errors.includes('synthetic-review-progress')) {
+        progress = true;
+        completedBeforeProgress = readFileSync(resultPath, 'utf8').length > 0;
+      }
+    });
+    const exit = await new Promise((resolve, reject) => {child.on('error', reject);child.on('close', resolve);});
+    assert.equal(exit, 0, errors);
+    assert.equal(progress, true, 'stderr was buffered until the review ended');
+    assert.equal(completedBeforeProgress, false, 'progress arrived only after the result');
+    assert.deepEqual(JSON.parse(readFileSync(resultPath,'utf8')), {status:'success',comments:[]});
+    assert.match(readFileSync(stderrPath,'utf8'), /synthetic-review-progress/);
+  } finally {rmSync(dir,{recursive:true});}
+});
 
 test('Go gets OCR conversation affinity; other providers keep their headers', () => {
   const dir = mkdtempSync(join(tmpdir(), 'ocr-config-'));

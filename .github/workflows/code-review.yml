@@ -73,7 +73,10 @@ jobs:
     # context" step below, before any fork code is checked out with the review secrets (OCR #29).
     # See lavasec-infra plans/2026-07-08-linux-ci-runner-cost-plan.md.
     runs-on: ${{ (github.event.repository.private && (github.event_name != 'pull_request' || github.event.pull_request.head.repo.fork == false)) && fromJSON(vars.LINUX_CI_RUNNER || '["ubicloud-standard-2"]') || fromJSON('["ubuntu-latest"]') }}
-    timeout-minutes: 30  # cap so a hung/looping review can't hold a self-hosted (Ubicloud) worker (OCR #29)
+    # Keep the ordinary PR cap; full source syncs need enough time to review hundreds
+    # of files. On-demand payloads omit changed_files, so allow the same bounded full
+    # review budget there. Trigger/trust gates below still apply before any work.
+    timeout-minutes: ${{ (github.event_name == 'issue_comment' || github.event.pull_request.changed_files >= 500) && 90 || 30 }}
     # Runs for:
     #   * a same-repo PR (fork heads never receive the secret, so they'd fail
     #     the config/review/post steps on an empty token — skip them cleanly), or
@@ -330,11 +333,10 @@ jobs:
             --from "${FROM_REF}" \
             --to "${HEAD_SHA}" \
             --format json \
-            > /tmp/ocr-result.json 2>/tmp/ocr-stderr.log || true
+            > /tmp/ocr-result.json 2> >(tee /tmp/ocr-stderr.log >&2) || true
           echo "=== OCR output ==="
           cat /tmp/ocr-result.json
-          echo "=== OCR stderr ==="
-          cat /tmp/ocr-stderr.log
+          # Progress was streamed live; retain the same file for failure diagnostics.
 
       # Posts OCR's findings as one PR review with inline comments. Before posting, new
       # inline comments are deduplicated POSITIONALLY (path + line-range) against THIS
