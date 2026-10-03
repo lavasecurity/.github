@@ -466,10 +466,23 @@ jobs:
 
             const comments = result.comments || [];
             const warnings = result.warnings || [];
+            // Current OCR reports coverage in its native manifest. Waivers are
+            // allowed upstream but cannot satisfy this workflow's full review gate.
+            const manifest = result.manifest;
+            const nativeIncomplete = manifest !== undefined && (
+              manifest?.schema_version !== 'ocr.run-manifest/v1'
+              || manifest.terminal_state !== 'complete'
+              || !['selected', 'completed', 'reused', 'failed', 'waived'].every(key => Array.isArray(manifest.coverage?.[key]))
+              || manifest.coverage.failed.length > 0
+              || manifest.coverage.waived.length > 0
+              || manifest.coverage.selected.length !== manifest.coverage.completed.length + manifest.coverage.reused.length
+            );
             const incomplete = ['failed', 'partial', 'completed_with_errors'].includes(result.status)
-              || (result.coverage?.failed?.length || 0) > 0;
+              || (result.coverage?.failed?.length || 0) > 0
+              || (result.coverage?.waived?.length || 0) > 0
+              || nativeIncomplete;
             if (incomplete) {
-              const message = result.message || 'Review failed before it completed.';
+              const message = result.message || 'Review did not complete full coverage without failures or waivers.';
               core.setFailed(message);
               await github.rest.issues.createComment({
                 owner: context.repo.owner,

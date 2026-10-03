@@ -279,6 +279,36 @@ test('completed empty review stays green', async () => {
   assert.match(result.calls[0], /^✅/);
 });
 
+function nativeCompleteResult() {
+  return {status:'complete',comments:[],manifest:{schema_version:'ocr.run-manifest/v1',terminal_state:'complete',
+    coverage:{selected:[{path:'one.swift'},{path:'two.swift'}],completed:[{path:'one.swift'}],reused:[{path:'two.swift'}],failed:[],waived:[]}}};
+}
+
+test('native complete reports with failed, waived, or incomplete coverage stay red', async () => {
+  for (const mutate of [
+    r => {r.manifest.coverage.failed=[{path:'failed.swift'}];},
+    r => {r.manifest.coverage.reused=[];r.manifest.coverage.waived=[{path:'two.swift'}];},
+    r => {r.manifest.coverage.reused=[];},
+    r => {delete r.manifest.coverage.waived;},
+    r => {r.manifest.terminal_state='partial';},
+    r => {r.manifest.schema_version='unknown';},
+    r => {r.manifest=null;},
+  ]) {
+    const raw=nativeCompleteResult();mutate(raw);
+    const result=await post(JSON.stringify(raw));
+    assert.equal(result.failures.length,1);
+    assert.equal(result.calls.length,1);
+    assert.match(result.calls[0],/^⚠️/);
+    assert.doesNotMatch(result.calls[0],/✅|Looks good/);
+  }
+});
+
+test('native completed and reused coverage stays green without waivers', async () => {
+  const result=await post(JSON.stringify(nativeCompleteResult()));
+  assert.deepEqual(result.failures,[]);
+  assert.match(result.calls[0],/^✅/);
+});
+
 test('partial reviews with failed coverage never claim green', async () => {
   for (const status of ['partial', 'completed_with_errors', 'completed_with_warnings']) {
     const result = await post(JSON.stringify({ status, comments: [], coverage: { failed: [{ path: 'unreviewed.swift' }] } }));
