@@ -160,9 +160,9 @@ jobs:
       - name: Configure OCR
         env:
           OCR_LLM_URL: ${{ inputs.llm_url }}
-          # Only an explicit public flag selects the free preview. Missing visibility
+          # Only an explicit public flag selects the free coding model. Missing visibility
           # stays on the private default; toJSON avoids null == false coercion.
-          OCR_LLM_MODEL: ${{ inputs.llm_model || (toJSON(github.event.repository.private) == 'false' && 'longcat-2.5-preview-free' || 'glm-5.3-flash') }}
+          OCR_LLM_MODEL: ${{ inputs.llm_model || (toJSON(github.event.repository.private) == 'false' && 'space-bunny-free' || 'glm-5.3-flash') }}
           OCR_USE_ANTHROPIC: ${{ inputs.use_anthropic }}
           OCR_LLM_AUTH_TOKEN: ${{ secrets.llm_auth_token }}
         run: |
@@ -291,7 +291,7 @@ jobs:
           OCR_REVIEW_CONCURRENCY: ${{ (inputs.llm_url == 'https://opencode.ai/zen/go/v1' || inputs.llm_url == 'https://opencode.ai/zen/go/v1/') && (github.event.pull_request.changed_files || steps.pr-context.outputs.changed_files) >= 500 && 16 || 8 }}
           # Two bounded resumes reuse only native-validated completed checkpoints.
           # Keep paid/private and custom-provider request counts unchanged.
-          OCR_REVIEW_ATTEMPTS: ${{ toJSON(github.event.repository.private) == 'false' && (inputs.llm_url == 'https://opencode.ai/zen/go/v1' || inputs.llm_url == 'https://opencode.ai/zen/go/v1/') && (!inputs.llm_model || inputs.llm_model == 'longcat-2.5-preview-free') && (github.event.pull_request.changed_files || steps.pr-context.outputs.changed_files) >= 500 && 3 || 1 }}
+          OCR_REVIEW_ATTEMPTS: ${{ toJSON(github.event.repository.private) == 'false' && (inputs.llm_url == 'https://opencode.ai/zen/go/v1' || inputs.llm_url == 'https://opencode.ai/zen/go/v1/') && (!inputs.llm_model || inputs.llm_model == 'longcat-2.5-preview-free' || inputs.llm_model == 'space-bunny-free') && (github.event.pull_request.changed_files || steps.pr-context.outputs.changed_files) >= 500 && 3 || 1 }}
         run: |
           if [ "$EVENT_NAME" = "pull_request" ]; then
             BASE_REF="$PR_BASE_REF"

@@ -69,7 +69,7 @@ test('only explicitly public repositories default to the free model', () => {
   const defaultModel = workflow.split('      llm_model:\n')[1].split('      use_anthropic:\n')[0]
     .match(/        default: "(.*)"/)[1];
   for (const [privateFlag, expected] of [
-    [false, 'longcat-2.5-preview-free'], [true, 'glm-5.3-flash'],
+    [false, 'space-bunny-free'], [true, 'glm-5.3-flash'],
     [undefined, 'glm-5.3-flash'], [null, 'glm-5.3-flash'],
     ['false', 'glm-5.3-flash'], [0, 'glm-5.3-flash'],
   ]) {
@@ -87,14 +87,18 @@ test('bounded resumes apply only to large public free Go reviews', () => {
   for (const [visibility, url, model, files, resolvedFiles, attempts] of [
     [false, 'https://opencode.ai/zen/go/v1', '', 500, undefined, 3],
     [false, 'https://opencode.ai/zen/go/v1/', 'longcat-2.5-preview-free', 1470, undefined, 3],
+    [false, 'https://opencode.ai/zen/go/v1', 'space-bunny-free', 500, undefined, 3],
+    [false, 'https://opencode.ai/zen/go/v1/', 'space-bunny-free', 1470, undefined, 3],
     [false, 'https://opencode.ai/zen/go/v1', '', undefined, '1470', 3],
     [false, 'https://opencode.ai/zen/go/v1', '', 499, undefined, 1],
     [false, 'https://opencode.ai/zen/go/v1', '', undefined, undefined, 1],
     [false, 'https://opencode.ai/zen/go/v1', 'paid-model', 1470, undefined, 1],
     [true, 'https://opencode.ai/zen/go/v1', 'longcat-2.5-preview-free', 1470, undefined, 1],
+    [true, 'https://opencode.ai/zen/go/v1', 'space-bunny-free', 1470, undefined, 1],
     [undefined, 'https://opencode.ai/zen/go/v1', '', 1470, undefined, 1],
     ['false', 'https://opencode.ai/zen/go/v1', '', 1470, undefined, 1],
     [false, 'https://example.com/v1', '', 1470, undefined, 1],
+    [false, 'https://example.com/v1', 'space-bunny-free', 1470, undefined, 1],
     [false, 'https://opencode.ai/zen/go/v1/messages', '', 1470, undefined, 1],
   ]) {
     assert.equal(evaluate({llm_url:url,llm_model:model}, {event:{repository:{private:visibility},pull_request:{changed_files:files}}},
