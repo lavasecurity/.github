@@ -477,7 +477,7 @@ jobs:
               || manifest.coverage.waived.length > 0
               || manifest.coverage.selected.length !== manifest.coverage.completed.length + manifest.coverage.reused.length
             );
-            const incomplete = ['failed', 'partial', 'completed_with_errors'].includes(result.status)
+            const incomplete = !['success', 'complete'].includes(result.status)
               || (result.coverage?.failed?.length || 0) > 0
               || (result.coverage?.waived?.length || 0) > 0
               || nativeIncomplete;

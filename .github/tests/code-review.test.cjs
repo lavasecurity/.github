@@ -273,6 +273,15 @@ test('invalid review output fails the check', async () => {
   assert.match(result.calls[0], /^⚠️/);
 });
 
+test('valid JSON without a recognized completed status never claims green', async () => {
+  for (const raw of [{}, {status:'unknown',comments:[]}, {...nativeCompleteResult(),status:null}]) {
+    const result=await post(JSON.stringify(raw));
+    assert.equal(result.failures.length,1);
+    assert.match(result.calls[0],/^⚠️/);
+    assert.doesNotMatch(result.calls[0],/✅|Looks good/);
+  }
+});
+
 test('completed empty review stays green', async () => {
   const result = await post(JSON.stringify({ status: 'success', comments: [], message: 'Review completed' }));
   assert.deepEqual(result.failures, []);
