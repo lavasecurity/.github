@@ -351,13 +351,27 @@ test('native no-eligible-file skips succeed without claiming a code review', asy
   assert.doesNotMatch(result.calls[0],/✅|Looks good/);
 });
 
+test('legacy no-eligible-file skips are informational and cannot hide coverage', async () => {
+  const result=await post(JSON.stringify({status:'skipped',comments:[]}));
+  assert.deepEqual(result.failures,[]);
+  assert.match(result.calls[0],/^ℹ️/);
+  assert.match(result.calls[0],/No eligible files/);
+  assert.doesNotMatch(result.calls[0],/✅|Looks good/);
+  for(const raw of [
+    {status:'skipped'},
+    {status:'skipped',comments:[],coverage:{selected:[{path:'one.swift'}]}},
+    {status:'skipped',comments:[],coverage:{failed:[{path:'one.swift'}]}},
+    {status:'skipped',comments:[],manifest:null},
+  ]) assert.equal((await post(JSON.stringify(raw))).failures.length,1);
+});
+
 test('skipped status cannot hide selected, failed, waived, or inconsistent coverage', async () => {
   for(const mutate of [
     r=>{r.manifest.coverage.selected=[{path:'one.swift'}];},
     r=>{r.manifest.coverage.failed=[{path:'one.swift'}];},
     r=>{r.manifest.coverage.waived=[{path:'one.swift'}];},
     r=>{r.manifest.terminal_state='complete';},
-    r=>{delete r.manifest;},
+    r=>{r.manifest=null;},
   ]) {
     const raw=nativeSkippedResult();mutate(raw);
     const result=await post(JSON.stringify(raw));

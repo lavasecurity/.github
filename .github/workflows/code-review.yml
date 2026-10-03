@@ -473,11 +473,17 @@ jobs:
             // Current OCR reports coverage in its native manifest. Waivers are
             // allowed upstream but cannot satisfy this workflow's full review gate.
             const manifest = result.manifest;
+            // Older OCR pins emit the documented skipped envelope without a manifest.
+            // Accept only its empty-comments shape with no coverage to conceal.
+            const legacySkipped = result.status === 'skipped' && manifest === undefined
+              && Array.isArray(result.comments) && result.comments.length === 0
+              && result.coverage === undefined;
             const nativeSkipped = result.status === 'skipped'
               && manifest?.schema_version === 'ocr.run-manifest/v1'
               && manifest.terminal_state === 'skipped'
               && comments.length === 0
               && ['selected', 'completed', 'reused', 'failed', 'waived'].every(key => Array.isArray(manifest.coverage?.[key]) && manifest.coverage[key].length === 0);
+            const skippedReview = legacySkipped || nativeSkipped;
             const nativeIncomplete = manifest !== undefined && !nativeSkipped && (
               manifest?.schema_version !== 'ocr.run-manifest/v1'
               || manifest.terminal_state !== 'complete'
@@ -486,7 +492,7 @@ jobs:
               || manifest.coverage.waived.length > 0
               || manifest.coverage.selected.length !== manifest.coverage.completed.length + manifest.coverage.reused.length
             );
-            const incomplete = (!['success', 'complete'].includes(result.status) && !nativeSkipped)
+            const incomplete = (!['success', 'complete'].includes(result.status) && !skippedReview)
               || (result.coverage?.failed?.length || 0) > 0
               || (result.coverage?.waived?.length || 0) > 0
               || nativeIncomplete;
@@ -504,12 +510,12 @@ jobs:
             }
 
             if (comments.length === 0) {
-              const message = result.message || (nativeSkipped ? 'No eligible files to review.' : 'No comments generated. Looks good to me.');
+              const message = result.message || (skippedReview ? 'No eligible files to review.' : 'No comments generated. Looks good to me.');
               await github.rest.issues.createComment({
                 owner: context.repo.owner,
                 repo: context.repo.repo,
                 issue_number: context.issue.number,
-                body: `${nativeSkipped ? 'ℹ️' : '✅'} **OpenCodeReview**: ${message}`
+                body: `${skippedReview ? 'ℹ️' : '✅'} **OpenCodeReview**: ${message}`
               });
               return;
             }
