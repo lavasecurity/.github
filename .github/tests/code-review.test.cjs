@@ -80,6 +80,92 @@ test('only explicitly public repositories default to the free model', () => {
   }
 });
 
+test('bounded resumes apply only to large public free Go reviews', () => {
+  const raw = workflow.match(/^          OCR_REVIEW_ATTEMPTS: (.+)$/m)[1].trim();
+  const evaluate = new Function('inputs', 'github', 'steps', 'toJSON',
+    `return (${raw.replace(/^\$\{\{\s*|\s*\}\}$/g, '').replaceAll('steps.pr-context', "steps['pr-context']")});`);
+  for (const [visibility, url, model, files, resolvedFiles, attempts] of [
+    [false, 'https://opencode.ai/zen/go/v1', '', 500, undefined, 3],
+    [false, 'https://opencode.ai/zen/go/v1/', 'longcat-2.5-preview-free', 1470, undefined, 3],
+    [false, 'https://opencode.ai/zen/go/v1', '', undefined, '1470', 3],
+    [false, 'https://opencode.ai/zen/go/v1', '', 499, undefined, 1],
+    [false, 'https://opencode.ai/zen/go/v1', '', undefined, undefined, 1],
+    [false, 'https://opencode.ai/zen/go/v1', 'paid-model', 1470, undefined, 1],
+    [true, 'https://opencode.ai/zen/go/v1', 'longcat-2.5-preview-free', 1470, undefined, 1],
+    [undefined, 'https://opencode.ai/zen/go/v1', '', 1470, undefined, 1],
+    ['false', 'https://opencode.ai/zen/go/v1', '', 1470, undefined, 1],
+    [false, 'https://example.com/v1', '', 1470, undefined, 1],
+    [false, 'https://opencode.ai/zen/go/v1/messages', '', 1470, undefined, 1],
+  ]) {
+    assert.equal(evaluate({llm_url:url,llm_model:model}, {event:{repository:{private:visibility},pull_request:{changed_files:files}}},
+      {'pr-context':{outputs:{changed_files:resolvedFiles}}}, value => value === undefined ? 'null' : JSON.stringify(value)), attempts);
+  }
+});
+
+function runResumeFixture(mode, attempts = 3) {
+  const dir = mkdtempSync(join(tmpdir(), 'ocr-resume-'));
+  try {
+    const head = '1'.repeat(40), session = '11111111-1111-4111-8111-111111111111';
+    writeFileSync(join(dir, 'ocr'), `#!/usr/bin/env node
+const fs=require('node:fs');
+const calls=fs.existsSync(process.env.OCR_CAPTURE)?JSON.parse(fs.readFileSync(process.env.OCR_CAPTURE,'utf8')):[];
+calls.push(process.argv.slice(2));fs.writeFileSync(process.env.OCR_CAPTURE,JSON.stringify(calls));
+const complete=process.env.OCR_TEST_MODE==='recover'&&calls.length===2;
+const sessionDigit=String(calls.length);
+const sessionId=sessionDigit.repeat(8)+'-'+sessionDigit.repeat(4)+'-4'+sessionDigit.repeat(3)+'-8'+sessionDigit.repeat(3)+'-'+sessionDigit.repeat(12);
+const result={status:complete?'complete':'partial',session_id:sessionId,comments:[{path:'already-reviewed.swift',body:'retained finding'}],
+manifest:{schema_version:'ocr.run-manifest/v1',terminal_state:complete?'complete':'partial',input:{resolved_head:'${head}'},
+coverage:{selected:[{path:'already-reviewed.swift'},{path:'failed.swift'}],completed:complete?[{path:'failed.swift'}]:[{path:'already-reviewed.swift'}],
+reused:complete?[{path:'already-reviewed.swift'}]:[],failed:complete?[]:[{path:'failed.swift'}],waived:[]}}};
+if(process.env.OCR_TEST_MODE==='wrong-head')result.manifest.input.resolved_head='2'.repeat(40);
+if(process.env.OCR_TEST_MODE==='bad-session')result.session_id='../../arbitrary';
+if(process.env.OCR_TEST_MODE==='waived')result.manifest.coverage.waived=[{path:'waived.swift'}];
+if(process.env.OCR_TEST_MODE==='legacy')delete result.manifest;
+process.stdout.write(process.env.OCR_TEST_MODE==='malformed'?'not JSON':JSON.stringify(result));
+`, {mode:0o755});
+    const capture = join(dir, 'calls.json'), output = join(dir, 'result.json');
+    const body = stepBody('Run OpenCodeReview', 'run')
+      .replaceAll('/tmp/ocr-result.json', output).replaceAll('/tmp/ocr-stderr.log', join(dir, 'stderr.log'));
+    const result = spawnSync('bash', ['-e', '-c', body], {env:{...process.env,PATH:`${dir}:${process.env.PATH}`,
+      OCR_CAPTURE:capture,OCR_TEST_MODE:mode,OCR_REVIEW_ATTEMPTS:String(attempts),OCR_REVIEW_CONCURRENCY:'16',
+      EVENT_NAME:'pull_request',PR_ACTION:'opened',PR_BASE_REF:'main',PR_HEAD_SHA:head}});
+    assert.equal(result.status,0,result.stderr.toString());
+    return {calls:JSON.parse(readFileSync(capture,'utf8')),raw:readFileSync(output,'utf8'),session,head};
+  } finally {rmSync(dir,{recursive:true});}
+}
+
+test('actual review step resumes incomplete coverage and retains findings', () => {
+  const {calls,raw,session,head} = runResumeFixture('recover');
+  assert.equal(calls.length,2);
+  assert.equal(calls[0].includes('--resume'),false);
+  assert.equal(calls[1][calls[1].indexOf('--resume')+1],session);
+  for (const args of calls) {
+    assert.equal(args[args.indexOf('--from')+1],'origin/main');
+    assert.equal(args[args.indexOf('--to')+1],head);
+    assert.equal(args[args.indexOf('--concurrency')+1],'16');
+  }
+  const output = JSON.parse(raw);
+  assert.equal(output.status,'complete');
+  assert.deepEqual(output.comments,[{path:'already-reviewed.swift',body:'retained finding'}]);
+  assert.equal(output.manifest.coverage.reused.length+output.manifest.coverage.completed.length,2);
+  assert.equal(output.manifest.coverage.failed.length,0);
+});
+
+test('resume exhaustion and invalid manifests remain red', async () => {
+  const exhausted = runResumeFixture('exhaust');
+  assert.equal(exhausted.calls.length,3);
+  assert.equal(exhausted.calls[2][exhausted.calls[2].indexOf('--resume')+1],'22222222-2222-4222-8222-222222222222');
+  assert.equal(JSON.parse(exhausted.raw).status,'partial');
+  // Remove comments to exercise the existing failed-coverage posting path.
+  const incomplete = JSON.parse(exhausted.raw);incomplete.comments=[];
+  assert.equal((await post(JSON.stringify(incomplete))).failures.length,1);
+  for (const mode of ['wrong-head','bad-session','waived','legacy','malformed']) {
+    const result = runResumeFixture(mode);
+    assert.equal(result.calls.length,1,mode);
+  }
+  assert.equal(runResumeFixture('recover',1).calls.length,1);
+});
+
 test('review progress reaches the job log before the result completes', async () => {
   const dir = mkdtempSync(join(tmpdir(), 'ocr-progress-'));
   try {
