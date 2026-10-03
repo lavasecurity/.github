@@ -64,20 +64,20 @@ test('large review worker counts reach the actual CLI for PRs and on-demand runs
   } finally {rmSync(dir,{recursive:true});}
 });
 
-test('only explicitly public repositories default to the free model', () => {
+test('direct DeepSeek Flash is the default for every repository visibility', () => {
   const raw = workflow.match(/^          OCR_LLM_MODEL: (.+)$/m)[1].trim();
   const evaluate = new Function('inputs', 'github', 'toJSON',
     `return (${raw.replace(/^\$\{\{\s*|\s*\}\}$/g, '')});`);
   const defaultModel = workflow.split('      llm_model:\n')[1].split('      use_anthropic:\n')[0]
     .match(/        default: "(.*)"/)[1];
-  for (const [privateFlag, expected] of [
-    [false, 'longcat-2.5-preview-free'], [true, 'glm-5.3-flash'],
-    [undefined, 'glm-5.3-flash'], [null, 'glm-5.3-flash'],
-    ['false', 'glm-5.3-flash'], [0, 'glm-5.3-flash'],
-  ]) {
-    for (const override of ['', 'explicit-provider-model']) {
-      assert.equal(evaluate({llm_model:override || defaultModel}, {event:{repository:{private:privateFlag}}},
-        value => value === undefined ? 'null' : JSON.stringify(value)), override || expected);
+  const defaultURL = workflow.split('      llm_url:\n')[1].split('      llm_model:\n')[0]
+    .match(/        default: "(.*)"/)[1];
+  assert.equal(defaultModel,'deepseek-flash');
+  assert.equal(defaultURL,'https://api.deepseek.com');
+  for (const privateFlag of [false,true,undefined,null,'false',0]) {
+    for (const override of [undefined,'','explicit-provider-model']) {
+      assert.equal(evaluate({llm_model:override}, {event:{repository:{private:privateFlag}}},
+        value => value === undefined ? 'null' : JSON.stringify(value)), override || defaultModel);
     }
   }
 });
@@ -87,11 +87,12 @@ test('bounded resumes apply only to large public free Go reviews', () => {
   const evaluate = new Function('inputs', 'github', 'steps', 'toJSON',
     `return (${raw.replace(/^\$\{\{\s*|\s*\}\}$/g, '').replaceAll('steps.pr-context', "steps['pr-context']")});`);
   for (const [visibility, url, model, files, resolvedFiles, attempts] of [
-    [false, 'https://opencode.ai/zen/go/v1', '', 500, undefined, 3],
+    [false, 'https://opencode.ai/zen/go/v1', '', 500, undefined, 1],
     [false, 'https://opencode.ai/zen/go/v1/', 'longcat-2.5-preview-free', 1470, undefined, 3],
     [false, 'https://opencode.ai/zen/go/v1', 'space-bunny-free', 500, undefined, 3],
     [false, 'https://opencode.ai/zen/go/v1/', 'space-bunny-free', 1470, undefined, 3],
-    [false, 'https://opencode.ai/zen/go/v1', '', undefined, '1470', 3],
+    [false, 'https://opencode.ai/zen/go/v1', 'longcat-2.5-preview-free', undefined, '1470', 3],
+    [false, 'https://api.deepseek.com', 'deepseek-flash', 1470, undefined, 1],
     [false, 'https://opencode.ai/zen/go/v1', '', 499, undefined, 1],
     [false, 'https://opencode.ai/zen/go/v1', '', undefined, undefined, 1],
     [false, 'https://opencode.ai/zen/go/v1', 'paid-model', 1470, undefined, 1],

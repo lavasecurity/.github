@@ -30,15 +30,15 @@ on:
   workflow_call:
     inputs:
       llm_url:
-        description: "LLM endpoint. Defaults to OpenCode Go's Chat Completions API. Overrides must match llm_model, use_anthropic, and the API key."
+        description: "LLM endpoint. Defaults to the direct DeepSeek Chat Completions API. Overrides must match llm_model, use_anthropic, and the API key."
         type: string
-        default: "https://opencode.ai/zen/go/v1"
+        default: "https://api.deepseek.com"
       llm_model:
-        description: "Model to review with. Empty selects LongCat's free preview for public repositories and GLM-5.3-Flash for private repositories. Use a bare API model id, not the opencode-go/ config prefix."
+        description: "Model to review with. Defaults to deepseek-flash for all repositories. Use a bare API model id matching the configured endpoint."
         type: string
-        default: ""
+        default: "deepseek-flash"
       use_anthropic:
-        description: "Speak the Anthropic protocol. False for the default Chat Completions models; set true with an Anthropic Messages endpoint, such as Go's MiniMax models."
+        description: "Speak the Anthropic protocol. False for the default DeepSeek Chat Completions API; set true only with an Anthropic Messages endpoint and matching credential."
         type: boolean
         default: false
       ocr_version:
@@ -47,7 +47,7 @@ on:
         default: ""
     secrets:
       llm_auth_token:
-        description: "API key for the configured LLM endpoint (e.g. your OpenCode Go API key)."
+        description: "API key for the configured LLM endpoint (DeepSeek by default)."
         required: true
 
 # One review per PR; a new push cancels the superseded run so rapid pushes don't
@@ -160,9 +160,8 @@ jobs:
       - name: Configure OCR
         env:
           OCR_LLM_URL: ${{ inputs.llm_url }}
-          # Only an explicit public flag selects the free coding model. Missing visibility
-          # stays on the private default; toJSON avoids null == false coercion.
-          OCR_LLM_MODEL: ${{ inputs.llm_model || (toJSON(github.event.repository.private) == 'false' && 'longcat-2.5-preview-free' || 'glm-5.3-flash') }}
+          # Explicitly empty overrides also keep the DeepSeek default.
+          OCR_LLM_MODEL: ${{ inputs.llm_model || 'deepseek-flash' }}
           OCR_USE_ANTHROPIC: ${{ inputs.use_anthropic }}
           OCR_LLM_AUTH_TOKEN: ${{ secrets.llm_auth_token }}
         run: |
@@ -296,7 +295,7 @@ jobs:
           OCR_REVIEW_CONCURRENCY: ${{ (inputs.llm_url == 'https://opencode.ai/zen/go/v1' || inputs.llm_url == 'https://opencode.ai/zen/go/v1/' || inputs.llm_url == 'https://api.deepseek.com' || inputs.llm_url == 'https://api.deepseek.com/') && (github.event.pull_request.changed_files || steps.pr-context.outputs.changed_files) >= 500 && 16 || 8 }}
           # Two bounded resumes reuse only native-validated completed checkpoints.
           # Keep paid/private and custom-provider request counts unchanged.
-          OCR_REVIEW_ATTEMPTS: ${{ toJSON(github.event.repository.private) == 'false' && (inputs.llm_url == 'https://opencode.ai/zen/go/v1' || inputs.llm_url == 'https://opencode.ai/zen/go/v1/') && (!inputs.llm_model || inputs.llm_model == 'longcat-2.5-preview-free' || inputs.llm_model == 'space-bunny-free') && (github.event.pull_request.changed_files || steps.pr-context.outputs.changed_files) >= 500 && 3 || 1 }}
+          OCR_REVIEW_ATTEMPTS: ${{ toJSON(github.event.repository.private) == 'false' && (inputs.llm_url == 'https://opencode.ai/zen/go/v1' || inputs.llm_url == 'https://opencode.ai/zen/go/v1/') && (inputs.llm_model == 'longcat-2.5-preview-free' || inputs.llm_model == 'space-bunny-free') && (github.event.pull_request.changed_files || steps.pr-context.outputs.changed_files) >= 500 && 3 || 1 }}
         run: |
           if [ "$EVENT_NAME" = "pull_request" ]; then
             BASE_REF="$PR_BASE_REF"
