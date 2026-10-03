@@ -37,6 +37,8 @@ test('large review worker counts reach the actual CLI for PRs and on-demand runs
       ['pull_request', 499, undefined, 'https://opencode.ai/zen/go/v1', 8],
       ['pull_request', 500, undefined, 'https://opencode.ai/zen/go/v1', 16],
       ['pull_request', 1470, undefined, 'https://opencode.ai/zen/go/v1/', 16],
+      ['pull_request', 1470, undefined, 'https://api.deepseek.com', 16],
+      ['issue_comment', undefined, '1470', 'https://api.deepseek.com/', 16],
       ['issue_comment', undefined, undefined, 'https://opencode.ai/zen/go/v1', 8],
       ['issue_comment', undefined, '499', 'https://opencode.ai/zen/go/v1', 8],
       ['issue_comment', undefined, '1470', 'https://opencode.ai/zen/go/v1', 16],
@@ -69,7 +71,7 @@ test('only explicitly public repositories default to the free model', () => {
   const defaultModel = workflow.split('      llm_model:\n')[1].split('      use_anthropic:\n')[0]
     .match(/        default: "(.*)"/)[1];
   for (const [privateFlag, expected] of [
-    [false, 'space-bunny-free'], [true, 'glm-5.3-flash'],
+    [false, 'longcat-2.5-preview-free'], [true, 'glm-5.3-flash'],
     [undefined, 'glm-5.3-flash'], [null, 'glm-5.3-flash'],
     ['false', 'glm-5.3-flash'], [0, 'glm-5.3-flash'],
   ]) {
@@ -220,7 +222,7 @@ test('review progress reaches the job log before the result completes', async ()
   } finally {rmSync(dir,{recursive:true});}
 });
 
-test('Go gets OCR conversation affinity; other providers keep their headers', () => {
+test('provider configuration clears stale Go headers before setting conversation affinity', () => {
   const dir = mkdtempSync(join(tmpdir(), 'ocr-config-'));
   try {
     const bin = join(dir, 'ocr');
@@ -229,6 +231,7 @@ test('Go gets OCR conversation affinity; other providers keep their headers', ()
       ['https://opencode.ai/zen/go/v1', 'false'], ['https://opencode.ai/zen/go/v1/', 'false'],
       ['https://opencode.ai/zen/go/v1/messages', 'true'], ['https://opencode.ai/zen/go/v1/messages/', 'true'],
       ['https://example.com/v1', 'false'], ['https://example.com/v1/messages', 'true'],
+      ['https://api.deepseek.com', 'false'],
     ]) {
       const capture = join(dir, encodeURIComponent(url));
       const result = spawnSync('bash', ['-e', '-c', stepBody('Configure OCR', 'run')], {
@@ -239,12 +242,27 @@ test('Go gets OCR conversation affinity; other providers keep their headers', ()
       const calls = readFileSync(capture, 'utf8').trim().split('\n').map(JSON.parse);
       const headers = calls.filter(call => call[2] === 'llm.extra_headers');
       assert.deepEqual(headers, url.startsWith('https://opencode.ai/')
-        ? [['config', 'set', 'llm.extra_headers', 'x-opencode-session={ocr_session_key}']] : []);
+        ? [['config','set','llm.extra_headers',''],['config', 'set', 'llm.extra_headers', 'x-opencode-session={ocr_session_key}']]
+        : [['config','set','llm.extra_headers','']]);
       assert.deepEqual(calls.filter(call => call[2] === 'llm.use_anthropic'), [['config','set','llm.use_anthropic',protocol]]);
       assert.deepEqual(calls.filter(call => call[2] === 'llm.auth_header'), url.startsWith('https://opencode.ai/') && url.includes('/messages')
         ? [['config','set','llm.auth_header',''],['config','set','llm.auth_header','x-api-key']] : [['config','set','llm.auth_header','']]);
     }
   } finally { rmSync(dir, { recursive: true }); }
+});
+
+test('missing provider credential fails before configuring or calling OCR', () => {
+  const dir=mkdtempSync(join(tmpdir(),'ocr-missing-key-'));
+  try {
+    writeFileSync(join(dir,'ocr'),'#!/usr/bin/env node\nrequire("node:fs").writeFileSync(process.env.OCR_CAPTURE,"called");\n',{mode:0o755});
+    const capture=join(dir,'calls');
+    const result=spawnSync('bash',['-e','-c',stepBody('Configure OCR','run')],{env:{...process.env,
+      PATH:`${dir}:${process.env.PATH}`,OCR_CAPTURE:capture,OCR_LLM_URL:'https://api.deepseek.com',
+      OCR_LLM_MODEL:'deepseek-flash',OCR_LLM_AUTH_TOKEN:'',OCR_USE_ANTHROPIC:'false'}});
+    assert.notEqual(result.status,0);
+    assert.match(result.stdout.toString(),/::error::.*credential is missing/);
+    assert.equal(require('node:fs').existsSync(capture),false);
+  } finally {rmSync(dir,{recursive:true});}
 });
 
 async function post(raw) {
@@ -316,6 +334,35 @@ test('native completed and reused coverage stays green without waivers', async (
   const result=await post(JSON.stringify(nativeCompleteResult()));
   assert.deepEqual(result.failures,[]);
   assert.match(result.calls[0],/^✅/);
+});
+
+function nativeSkippedResult() {
+  const result=nativeCompleteResult();result.status='skipped';result.manifest.terminal_state='skipped';
+  for(const key of Object.keys(result.manifest.coverage))result.manifest.coverage[key]=[];
+  return result;
+}
+
+test('native no-eligible-file skips succeed without claiming a code review', async () => {
+  const result=await post(JSON.stringify(nativeSkippedResult()));
+  assert.deepEqual(result.failures,[]);
+  assert.match(result.calls[0],/^ℹ️/);
+  assert.match(result.calls[0],/No eligible files/);
+  assert.doesNotMatch(result.calls[0],/✅|Looks good/);
+});
+
+test('skipped status cannot hide selected, failed, waived, or inconsistent coverage', async () => {
+  for(const mutate of [
+    r=>{r.manifest.coverage.selected=[{path:'one.swift'}];},
+    r=>{r.manifest.coverage.failed=[{path:'one.swift'}];},
+    r=>{r.manifest.coverage.waived=[{path:'one.swift'}];},
+    r=>{r.manifest.terminal_state='complete';},
+    r=>{delete r.manifest;},
+  ]) {
+    const raw=nativeSkippedResult();mutate(raw);
+    const result=await post(JSON.stringify(raw));
+    assert.equal(result.failures.length,1);
+    assert.match(result.calls[0],/^⚠️/);
+  }
 });
 
 test('partial reviews with failed coverage never claim green', async () => {

@@ -5,7 +5,7 @@ name: Code Review
 # workflow itself. Keep the secret-bearing implementation on trusted main; PR changes
 # are exercised by local fixture tests. The reusable only triggers on workflow_call,
 # so there is no recursion. Requires the repo secret
-# OCR_LLM_AUTH_TOKEN (the OpenCode Go API key).
+# OCR_DEEPSEEK_AUTH_TOKEN (the direct DeepSeek API key).
 on:
   pull_request:
     types: [opened, synchronize, reopened]
@@ -19,9 +19,8 @@ jobs:
       pull-requests: write
     uses: lavasecurity/.github/.github/workflows/code-review.yml@main
     with:
-      # This public repository uses Go's free coding model after Longcat failures.
-      # The credential destination remains defined by the trusted reusable workflow.
-      llm_model: space-bunny-free
+      llm_url: https://api.deepseek.com
+      llm_model: deepseek-flash
       use_anthropic: false
     secrets:
-      llm_auth_token: ${{ secrets.OCR_LLM_AUTH_TOKEN }}
+      llm_auth_token: ${{ secrets.OCR_DEEPSEEK_AUTH_TOKEN }}

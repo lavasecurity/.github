@@ -162,16 +162,21 @@ jobs:
           OCR_LLM_URL: ${{ inputs.llm_url }}
           # Only an explicit public flag selects the free coding model. Missing visibility
           # stays on the private default; toJSON avoids null == false coercion.
-          OCR_LLM_MODEL: ${{ inputs.llm_model || (toJSON(github.event.repository.private) == 'false' && 'space-bunny-free' || 'glm-5.3-flash') }}
+          OCR_LLM_MODEL: ${{ inputs.llm_model || (toJSON(github.event.repository.private) == 'false' && 'longcat-2.5-preview-free' || 'glm-5.3-flash') }}
           OCR_USE_ANTHROPIC: ${{ inputs.use_anthropic }}
           OCR_LLM_AUTH_TOKEN: ${{ secrets.llm_auth_token }}
         run: |
+          if [ -z "$OCR_LLM_AUTH_TOKEN" ]; then
+            echo '::error::The caller review API credential is missing.'
+            exit 1
+          fi
           ocr config set llm.url "$OCR_LLM_URL"
           ocr config set llm.auth_token "$OCR_LLM_AUTH_TOKEN"
           ocr config set llm.model "$OCR_LLM_MODEL"
           ocr config set llm.use_anthropic "$OCR_USE_ANTHROPIC"
           # Reset per-run authentication on reused runners before provider overrides.
           ocr config set llm.auth_header ''
+          ocr config set llm.extra_headers ''
           # Go requires a stable conversation identity for routing and prompt caching.
           # OCR expands its native key per conversation, including grouping and planning.
           # Scope this provider-specific header to Go; other endpoints keep their defaults.
@@ -286,9 +291,9 @@ jobs:
           PR_HEAD_SHA: ${{ github.event.pull_request.head.sha }}
           CTX_BASE_REF: ${{ steps.pr-context.outputs.base_ref }}
           CTX_HEAD_SHA: ${{ steps.pr-context.outputs.head_sha }}
-          # Large Go Chat Completions diffs can fall back to per-file dispatch.
-          # Other endpoints and ordinary reviews retain OCR's eight-worker default.
-          OCR_REVIEW_CONCURRENCY: ${{ (inputs.llm_url == 'https://opencode.ai/zen/go/v1' || inputs.llm_url == 'https://opencode.ai/zen/go/v1/') && (github.event.pull_request.changed_files || steps.pr-context.outputs.changed_files) >= 500 && 16 || 8 }}
+          # Large Go and direct DeepSeek reviews use sixteen workers when per-file
+          # dispatch is needed. Ordinary reviews and other endpoints keep eight.
+          OCR_REVIEW_CONCURRENCY: ${{ (inputs.llm_url == 'https://opencode.ai/zen/go/v1' || inputs.llm_url == 'https://opencode.ai/zen/go/v1/' || inputs.llm_url == 'https://api.deepseek.com' || inputs.llm_url == 'https://api.deepseek.com/') && (github.event.pull_request.changed_files || steps.pr-context.outputs.changed_files) >= 500 && 16 || 8 }}
           # Two bounded resumes reuse only native-validated completed checkpoints.
           # Keep paid/private and custom-provider request counts unchanged.
           OCR_REVIEW_ATTEMPTS: ${{ toJSON(github.event.repository.private) == 'false' && (inputs.llm_url == 'https://opencode.ai/zen/go/v1' || inputs.llm_url == 'https://opencode.ai/zen/go/v1/') && (!inputs.llm_model || inputs.llm_model == 'longcat-2.5-preview-free' || inputs.llm_model == 'space-bunny-free') && (github.event.pull_request.changed_files || steps.pr-context.outputs.changed_files) >= 500 && 3 || 1 }}
@@ -469,7 +474,12 @@ jobs:
             // Current OCR reports coverage in its native manifest. Waivers are
             // allowed upstream but cannot satisfy this workflow's full review gate.
             const manifest = result.manifest;
-            const nativeIncomplete = manifest !== undefined && (
+            const nativeSkipped = result.status === 'skipped'
+              && manifest?.schema_version === 'ocr.run-manifest/v1'
+              && manifest.terminal_state === 'skipped'
+              && comments.length === 0
+              && ['selected', 'completed', 'reused', 'failed', 'waived'].every(key => Array.isArray(manifest.coverage?.[key]) && manifest.coverage[key].length === 0);
+            const nativeIncomplete = manifest !== undefined && !nativeSkipped && (
               manifest?.schema_version !== 'ocr.run-manifest/v1'
               || manifest.terminal_state !== 'complete'
               || !['selected', 'completed', 'reused', 'failed', 'waived'].every(key => Array.isArray(manifest.coverage?.[key]))
@@ -477,7 +487,7 @@ jobs:
               || manifest.coverage.waived.length > 0
               || manifest.coverage.selected.length !== manifest.coverage.completed.length + manifest.coverage.reused.length
             );
-            const incomplete = !['success', 'complete'].includes(result.status)
+            const incomplete = (!['success', 'complete'].includes(result.status) && !nativeSkipped)
               || (result.coverage?.failed?.length || 0) > 0
               || (result.coverage?.waived?.length || 0) > 0
               || nativeIncomplete;
@@ -495,12 +505,12 @@ jobs:
             }
 
             if (comments.length === 0) {
-              const message = result.message || 'No comments generated. Looks good to me.';
+              const message = result.message || (nativeSkipped ? 'No eligible files to review.' : 'No comments generated. Looks good to me.');
               await github.rest.issues.createComment({
                 owner: context.repo.owner,
                 repo: context.repo.repo,
                 issue_number: context.issue.number,
-                body: `✅ **OpenCodeReview**: ${message}`
+                body: `${nativeSkipped ? 'ℹ️' : '✅'} **OpenCodeReview**: ${message}`
               });
               return;
             }
