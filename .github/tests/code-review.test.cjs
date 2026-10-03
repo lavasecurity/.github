@@ -18,11 +18,42 @@ test('review budgets stay bounded and allow full source syncs and on-demand revi
     : new Function('github', `return (${raw.replace(/^\$\{\{\s*|\s*\}\}$/g, '')});`);
   for (const [event, files, minutes] of [
     ['pull_request', undefined, 30], ['pull_request', 1, 30],
-    ['pull_request', 499, 30], ['pull_request', 500, 90],
-    ['pull_request', 1470, 90], ['issue_comment', undefined, 90],
+    ['pull_request', 499, 30], ['pull_request', 500, 360],
+    ['pull_request', 1470, 360], ['issue_comment', undefined, 360],
   ]) {
     assert.equal(evaluate({event_name:event,event:{pull_request:{changed_files:files}}}), minutes, `${event}: ${files}`);
   }
+});
+
+test('large review worker counts reach the actual CLI for PRs and on-demand runs', () => {
+  const raw = workflow.match(/^          OCR_REVIEW_CONCURRENCY: (.+)$/m)[1].trim();
+  const evaluate = new Function('github', 'steps',
+    `return (${raw.replace(/^\$\{\{\s*|\s*\}\}$/g, '').replaceAll('steps.pr-context', "steps['pr-context']")});`);
+  const dir = mkdtempSync(join(tmpdir(), 'ocr-worker-count-'));
+  try {
+    writeFileSync(join(dir, 'ocr'), '#!/usr/bin/env node\nrequire("node:fs").writeFileSync(process.env.OCR_CAPTURE,JSON.stringify(process.argv.slice(2)));process.stdout.write(JSON.stringify({status:"complete",comments:[]}));\n', {mode:0o755});
+    for (const [event, files, resolvedFiles, expected] of [
+      ['pull_request', undefined, undefined, 8], ['pull_request', 499, undefined, 8],
+      ['pull_request', 500, undefined, 16], ['pull_request', 1470, undefined, 16],
+      ['issue_comment', undefined, undefined, 8], ['issue_comment', undefined, '499', 8],
+      ['issue_comment', undefined, '1470', 16],
+    ]) {
+      const workers = evaluate({event:{pull_request:{changed_files:files}}},
+        {'pr-context':{outputs:{changed_files:resolvedFiles}}});
+      assert.equal(workers, expected);
+      const capture = join(dir, 'args.json');
+      const body = stepBody('Run OpenCodeReview', 'run')
+        .replaceAll('/tmp/ocr-result.json', join(dir, 'result.json'))
+        .replaceAll('/tmp/ocr-stderr.log', join(dir, 'stderr.log'));
+      const result = spawnSync('bash', ['-e', '-c', body], {env:{...process.env,PATH:`${dir}:${process.env.PATH}`,
+        OCR_CAPTURE:capture,EVENT_NAME:event,PR_ACTION:'opened',PR_BASE_REF:'main',PR_HEAD_SHA:'synthetic',
+        CTX_BASE_REF:'main',CTX_HEAD_SHA:'synthetic',OCR_REVIEW_CONCURRENCY:String(workers)}});
+      assert.equal(result.status,0,result.stderr.toString());
+      const args = JSON.parse(readFileSync(capture,'utf8'));
+      assert.ok(args.includes('--concurrency'));
+      assert.equal(args[args.indexOf('--concurrency')+1],String(expected));
+    }
+  } finally {rmSync(dir,{recursive:true});}
 });
 
 test('only explicitly public repositories default to the free model', () => {
