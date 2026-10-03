@@ -286,9 +286,9 @@ jobs:
           PR_HEAD_SHA: ${{ github.event.pull_request.head.sha }}
           CTX_BASE_REF: ${{ steps.pr-context.outputs.base_ref }}
           CTX_HEAD_SHA: ${{ steps.pr-context.outputs.head_sha }}
-          # Large diffs can fall back to per-file dispatch when semantic grouping
-          # fails. Use more workers for that scope; ordinary reviews keep OCR's eight.
-          OCR_REVIEW_CONCURRENCY: ${{ (github.event.pull_request.changed_files || steps.pr-context.outputs.changed_files) >= 500 && 16 || 8 }}
+          # Large Go Chat Completions diffs can fall back to per-file dispatch.
+          # Other endpoints and ordinary reviews retain OCR's eight-worker default.
+          OCR_REVIEW_CONCURRENCY: ${{ (inputs.llm_url == 'https://opencode.ai/zen/go/v1' || inputs.llm_url == 'https://opencode.ai/zen/go/v1/') && (github.event.pull_request.changed_files || steps.pr-context.outputs.changed_files) >= 500 && 16 || 8 }}
         run: |
           if [ "$EVENT_NAME" = "pull_request" ]; then
             BASE_REF="$PR_BASE_REF"
