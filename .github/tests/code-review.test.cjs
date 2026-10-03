@@ -37,6 +37,8 @@ test('large review worker counts reach the actual CLI for PRs and on-demand runs
       ['pull_request', 499, undefined, 'https://opencode.ai/zen/go/v1', 8],
       ['pull_request', 500, undefined, 'https://opencode.ai/zen/go/v1', 16],
       ['pull_request', 1470, undefined, 'https://opencode.ai/zen/go/v1/', 16],
+      ['pull_request', 1470, undefined, 'https://api.deepseek.com', 16],
+      ['issue_comment', undefined, '1470', 'https://api.deepseek.com/', 16],
       ['issue_comment', undefined, undefined, 'https://opencode.ai/zen/go/v1', 8],
       ['issue_comment', undefined, '499', 'https://opencode.ai/zen/go/v1', 8],
       ['issue_comment', undefined, '1470', 'https://opencode.ai/zen/go/v1', 16],
@@ -62,21 +64,131 @@ test('large review worker counts reach the actual CLI for PRs and on-demand runs
   } finally {rmSync(dir,{recursive:true});}
 });
 
-test('only explicitly public repositories default to the free model', () => {
+test('direct DeepSeek Flash is the default for every repository visibility', () => {
   const raw = workflow.match(/^          OCR_LLM_MODEL: (.+)$/m)[1].trim();
   const evaluate = new Function('inputs', 'github', 'toJSON',
     `return (${raw.replace(/^\$\{\{\s*|\s*\}\}$/g, '')});`);
   const defaultModel = workflow.split('      llm_model:\n')[1].split('      use_anthropic:\n')[0]
     .match(/        default: "(.*)"/)[1];
-  for (const [privateFlag, expected] of [
-    [false, 'longcat-2.5-preview-free'], [true, 'glm-5.3-flash'],
-    [undefined, 'glm-5.3-flash'], [null, 'glm-5.3-flash'],
-    ['false', 'glm-5.3-flash'], [0, 'glm-5.3-flash'],
-  ]) {
-    for (const override of ['', 'explicit-provider-model']) {
-      assert.equal(evaluate({llm_model:override || defaultModel}, {event:{repository:{private:privateFlag}}},
-        value => value === undefined ? 'null' : JSON.stringify(value)), override || expected);
+  const defaultURL = workflow.split('      llm_url:\n')[1].split('      llm_model:\n')[0]
+    .match(/        default: "(.*)"/)[1];
+  assert.equal(defaultModel,'deepseek-flash');
+  assert.equal(defaultURL,'https://api.deepseek.com');
+  for (const privateFlag of [false,true,undefined,null,'false',0]) {
+    for (const override of [undefined,'','explicit-provider-model']) {
+      assert.equal(evaluate({llm_model:override}, {event:{repository:{private:privateFlag}}},
+        value => value === undefined ? 'null' : JSON.stringify(value)), override || defaultModel);
     }
+  }
+});
+
+test('bounded resumes apply only to large public free Go reviews', () => {
+  const raw = workflow.match(/^          OCR_REVIEW_ATTEMPTS: (.+)$/m)[1].trim();
+  const evaluate = new Function('inputs', 'github', 'steps', 'toJSON',
+    `return (${raw.replace(/^\$\{\{\s*|\s*\}\}$/g, '').replaceAll('steps.pr-context', "steps['pr-context']")});`);
+  for (const [visibility, url, model, files, resolvedFiles, attempts] of [
+    [false, 'https://opencode.ai/zen/go/v1', '', 500, undefined, 1],
+    [false, 'https://opencode.ai/zen/go/v1/', 'longcat-2.5-preview-free', 1470, undefined, 3],
+    [false, 'https://opencode.ai/zen/go/v1', 'space-bunny-free', 500, undefined, 3],
+    [false, 'https://opencode.ai/zen/go/v1/', 'space-bunny-free', 1470, undefined, 3],
+    [false, 'https://opencode.ai/zen/go/v1', 'longcat-2.5-preview-free', undefined, '1470', 3],
+    [false, 'https://api.deepseek.com', 'deepseek-flash', 1470, undefined, 1],
+    [false, 'https://opencode.ai/zen/go/v1', '', 499, undefined, 1],
+    [false, 'https://opencode.ai/zen/go/v1', '', undefined, undefined, 1],
+    [false, 'https://opencode.ai/zen/go/v1', 'paid-model', 1470, undefined, 1],
+    [true, 'https://opencode.ai/zen/go/v1', 'longcat-2.5-preview-free', 1470, undefined, 1],
+    [true, 'https://opencode.ai/zen/go/v1', 'space-bunny-free', 1470, undefined, 1],
+    [undefined, 'https://opencode.ai/zen/go/v1', '', 1470, undefined, 1],
+    ['false', 'https://opencode.ai/zen/go/v1', '', 1470, undefined, 1],
+    [false, 'https://example.com/v1', '', 1470, undefined, 1],
+    [false, 'https://example.com/v1', 'space-bunny-free', 1470, undefined, 1],
+    [false, 'https://opencode.ai/zen/go/v1/messages', '', 1470, undefined, 1],
+  ]) {
+    assert.equal(evaluate({llm_url:url,llm_model:model}, {event:{repository:{private:visibility},pull_request:{changed_files:files}}},
+      {'pr-context':{outputs:{changed_files:resolvedFiles}}}, value => value === undefined ? 'null' : JSON.stringify(value)), attempts);
+  }
+});
+
+function runResumeFixture(mode, attempts = 3) {
+  const dir = mkdtempSync(join(tmpdir(), 'ocr-resume-'));
+  try {
+    const head = '1'.repeat(40), session = '11111111-1111-4111-8111-111111111111';
+    writeFileSync(join(dir, 'ocr'), `#!/usr/bin/env node
+const fs=require('node:fs');
+const calls=fs.existsSync(process.env.OCR_CAPTURE)?JSON.parse(fs.readFileSync(process.env.OCR_CAPTURE,'utf8')):[];
+calls.push(process.argv.slice(2));fs.writeFileSync(process.env.OCR_CAPTURE,JSON.stringify(calls));
+const complete=process.env.OCR_TEST_MODE==='recover'&&calls.length===2;
+const sessionDigit=String(calls.length);
+const sessionId=sessionDigit.repeat(8)+'-'+sessionDigit.repeat(4)+'-4'+sessionDigit.repeat(3)+'-8'+sessionDigit.repeat(3)+'-'+sessionDigit.repeat(12);
+const result={status:complete?'complete':'partial',session_id:sessionId,comments:[{path:'already-reviewed.swift',body:'retained finding'}],
+manifest:{schema_version:'ocr.run-manifest/v1',terminal_state:complete?'complete':'partial',input:{resolved_head:'${head}'},
+coverage:{selected:[{path:'already-reviewed.swift'},{path:'failed.swift'}],completed:complete?[{path:'failed.swift'}]:[{path:'already-reviewed.swift'}],
+reused:complete?[{path:'already-reviewed.swift'}]:[],failed:complete?[]:[{path:'failed.swift'}],waived:[]}}};
+if(process.env.OCR_TEST_MODE==='wrong-head')result.manifest.input.resolved_head='2'.repeat(40);
+if(process.env.OCR_TEST_MODE==='bad-session')result.session_id='../../arbitrary';
+if(process.env.OCR_TEST_MODE==='waived')result.manifest.coverage.waived=[{path:'waived.swift'}];
+if(process.env.OCR_TEST_MODE==='legacy')delete result.manifest;
+if(calls.length>1&&process.env.OCR_TEST_MODE==='resume-wrong-head')result.manifest.input.resolved_head='2'.repeat(40);
+if(calls.length>1&&process.env.OCR_TEST_MODE==='resume-legacy')delete result.manifest;
+if(calls.length>1&&process.env.OCR_TEST_MODE==='resume-malformed'){process.stdout.write('not JSON');process.exit(0);}
+if(calls.length>1&&process.env.OCR_TEST_MODE==='resume-empty')process.exit(1);
+process.stdout.write(process.env.OCR_TEST_MODE==='malformed'?'not JSON':JSON.stringify(result));
+`, {mode:0o755});
+    const capture = join(dir, 'calls.json'), output = join(dir, 'result.json');
+    const body = stepBody('Run OpenCodeReview', 'run')
+      .replaceAll('/tmp/ocr-result.json', output).replaceAll('/tmp/ocr-stderr.log', join(dir, 'stderr.log'))
+      .replaceAll('/tmp/ocr-previous-result.json', join(dir, 'previous.json'));
+    const result = spawnSync('bash', ['-e', '-c', body], {env:{...process.env,PATH:`${dir}:${process.env.PATH}`,
+      OCR_CAPTURE:capture,OCR_TEST_MODE:mode,OCR_REVIEW_ATTEMPTS:String(attempts),OCR_REVIEW_CONCURRENCY:'16',
+      EVENT_NAME:'pull_request',PR_ACTION:'opened',PR_BASE_REF:'main',PR_HEAD_SHA:head}});
+    assert.equal(result.status,0,result.stderr.toString());
+    return {calls:JSON.parse(readFileSync(capture,'utf8')),raw:readFileSync(output,'utf8'),session,head};
+  } finally {rmSync(dir,{recursive:true});}
+}
+
+test('actual review step resumes incomplete coverage and retains findings', () => {
+  const {calls,raw,session,head} = runResumeFixture('recover');
+  assert.equal(calls.length,2);
+  assert.equal(calls[0].includes('--resume'),false);
+  assert.equal(calls[1][calls[1].indexOf('--resume')+1],session);
+  for (const args of calls) {
+    assert.equal(args[args.indexOf('--from')+1],'origin/main');
+    assert.equal(args[args.indexOf('--to')+1],head);
+    assert.equal(args[args.indexOf('--concurrency')+1],'16');
+  }
+  const output = JSON.parse(raw);
+  assert.equal(output.status,'complete');
+  assert.deepEqual(output.comments,[{path:'already-reviewed.swift',body:'retained finding'}]);
+  assert.equal(output.manifest.coverage.reused.length+output.manifest.coverage.completed.length,2);
+  assert.equal(output.manifest.coverage.failed.length,0);
+});
+
+test('resume exhaustion and invalid manifests remain red', async () => {
+  const exhausted = runResumeFixture('exhaust');
+  assert.equal(exhausted.calls.length,3);
+  assert.equal(exhausted.calls[2][exhausted.calls[2].indexOf('--resume')+1],'22222222-2222-4222-8222-222222222222');
+  assert.equal(JSON.parse(exhausted.raw).status,'partial');
+  // Remove comments to exercise the existing failed-coverage posting path.
+  const incomplete = JSON.parse(exhausted.raw);incomplete.comments=[];
+  assert.equal((await post(JSON.stringify(incomplete))).failures.length,1);
+  for (const mode of ['wrong-head','bad-session','waived','legacy','malformed']) {
+    const result = runResumeFixture(mode);
+    assert.equal(result.calls.length,1,mode);
+  }
+  assert.equal(runResumeFixture('recover',1).calls.length,1);
+});
+
+test('invalid resume output preserves earlier findings and remains red', async () => {
+  for (const mode of ['resume-malformed','resume-empty','resume-legacy','resume-wrong-head']) {
+    const {calls,raw,session} = runResumeFixture(mode);
+    assert.equal(calls.length,2,mode);
+    const result = JSON.parse(raw);
+    assert.equal(result.status,'partial',mode);
+    assert.equal(result.session_id,session,mode);
+    assert.deepEqual(result.comments,[{path:'already-reviewed.swift',body:'retained finding'}],mode);
+    // Exercise the existing red coverage gate without needing GitHub line positions.
+    result.comments=[];
+    assert.equal((await post(JSON.stringify(result))).failures.length,1,mode);
   }
 });
 
@@ -111,7 +223,7 @@ test('review progress reaches the job log before the result completes', async ()
   } finally {rmSync(dir,{recursive:true});}
 });
 
-test('Go gets OCR conversation affinity; other providers keep their headers', () => {
+test('provider configuration clears stale Go headers before setting conversation affinity', () => {
   const dir = mkdtempSync(join(tmpdir(), 'ocr-config-'));
   try {
     const bin = join(dir, 'ocr');
@@ -120,6 +232,7 @@ test('Go gets OCR conversation affinity; other providers keep their headers', ()
       ['https://opencode.ai/zen/go/v1', 'false'], ['https://opencode.ai/zen/go/v1/', 'false'],
       ['https://opencode.ai/zen/go/v1/messages', 'true'], ['https://opencode.ai/zen/go/v1/messages/', 'true'],
       ['https://example.com/v1', 'false'], ['https://example.com/v1/messages', 'true'],
+      ['https://api.deepseek.com', 'false'],
     ]) {
       const capture = join(dir, encodeURIComponent(url));
       const result = spawnSync('bash', ['-e', '-c', stepBody('Configure OCR', 'run')], {
@@ -130,12 +243,27 @@ test('Go gets OCR conversation affinity; other providers keep their headers', ()
       const calls = readFileSync(capture, 'utf8').trim().split('\n').map(JSON.parse);
       const headers = calls.filter(call => call[2] === 'llm.extra_headers');
       assert.deepEqual(headers, url.startsWith('https://opencode.ai/')
-        ? [['config', 'set', 'llm.extra_headers', 'x-opencode-session={ocr_session_key}']] : []);
+        ? [['config','set','llm.extra_headers',''],['config', 'set', 'llm.extra_headers', 'x-opencode-session={ocr_session_key}']]
+        : [['config','set','llm.extra_headers','']]);
       assert.deepEqual(calls.filter(call => call[2] === 'llm.use_anthropic'), [['config','set','llm.use_anthropic',protocol]]);
       assert.deepEqual(calls.filter(call => call[2] === 'llm.auth_header'), url.startsWith('https://opencode.ai/') && url.includes('/messages')
         ? [['config','set','llm.auth_header',''],['config','set','llm.auth_header','x-api-key']] : [['config','set','llm.auth_header','']]);
     }
   } finally { rmSync(dir, { recursive: true }); }
+});
+
+test('missing provider credential fails before configuring or calling OCR', () => {
+  const dir=mkdtempSync(join(tmpdir(),'ocr-missing-key-'));
+  try {
+    writeFileSync(join(dir,'ocr'),'#!/usr/bin/env node\nrequire("node:fs").writeFileSync(process.env.OCR_CAPTURE,"called");\n',{mode:0o755});
+    const capture=join(dir,'calls');
+    const result=spawnSync('bash',['-e','-c',stepBody('Configure OCR','run')],{env:{...process.env,
+      PATH:`${dir}:${process.env.PATH}`,OCR_CAPTURE:capture,OCR_LLM_URL:'https://api.deepseek.com',
+      OCR_LLM_MODEL:'deepseek-flash',OCR_LLM_AUTH_TOKEN:'',OCR_USE_ANTHROPIC:'false'}});
+    assert.notEqual(result.status,0);
+    assert.match(result.stdout.toString(),/::error::.*credential is missing/);
+    assert.equal(require('node:fs').existsSync(capture),false);
+  } finally {rmSync(dir,{recursive:true});}
 });
 
 async function post(raw) {
@@ -164,10 +292,92 @@ test('invalid review output fails the check', async () => {
   assert.match(result.calls[0], /^⚠️/);
 });
 
+test('valid JSON without a recognized completed status never claims green', async () => {
+  for (const raw of [{}, {status:'unknown',comments:[]}, {...nativeCompleteResult(),status:null}]) {
+    const result=await post(JSON.stringify(raw));
+    assert.equal(result.failures.length,1);
+    assert.match(result.calls[0],/^⚠️/);
+    assert.doesNotMatch(result.calls[0],/✅|Looks good/);
+  }
+});
+
 test('completed empty review stays green', async () => {
   const result = await post(JSON.stringify({ status: 'success', comments: [], message: 'Review completed' }));
   assert.deepEqual(result.failures, []);
   assert.match(result.calls[0], /^✅/);
+});
+
+function nativeCompleteResult() {
+  return {status:'complete',comments:[],manifest:{schema_version:'ocr.run-manifest/v1',terminal_state:'complete',
+    coverage:{selected:[{path:'one.swift'},{path:'two.swift'}],completed:[{path:'one.swift'}],reused:[{path:'two.swift'}],failed:[],waived:[]}}};
+}
+
+test('native complete reports with failed, waived, or incomplete coverage stay red', async () => {
+  for (const mutate of [
+    r => {r.manifest.coverage.failed=[{path:'failed.swift'}];},
+    r => {r.manifest.coverage.reused=[];r.manifest.coverage.waived=[{path:'two.swift'}];},
+    r => {r.manifest.coverage.reused=[];},
+    r => {delete r.manifest.coverage.waived;},
+    r => {r.manifest.terminal_state='partial';},
+    r => {r.manifest.schema_version='unknown';},
+    r => {r.manifest=null;},
+  ]) {
+    const raw=nativeCompleteResult();mutate(raw);
+    const result=await post(JSON.stringify(raw));
+    assert.equal(result.failures.length,1);
+    assert.equal(result.calls.length,1);
+    assert.match(result.calls[0],/^⚠️/);
+    assert.doesNotMatch(result.calls[0],/✅|Looks good/);
+  }
+});
+
+test('native completed and reused coverage stays green without waivers', async () => {
+  const result=await post(JSON.stringify(nativeCompleteResult()));
+  assert.deepEqual(result.failures,[]);
+  assert.match(result.calls[0],/^✅/);
+});
+
+function nativeSkippedResult() {
+  const result=nativeCompleteResult();result.status='skipped';result.manifest.terminal_state='skipped';
+  for(const key of Object.keys(result.manifest.coverage))result.manifest.coverage[key]=[];
+  return result;
+}
+
+test('native no-eligible-file skips succeed without claiming a code review', async () => {
+  const result=await post(JSON.stringify(nativeSkippedResult()));
+  assert.deepEqual(result.failures,[]);
+  assert.match(result.calls[0],/^ℹ️/);
+  assert.match(result.calls[0],/No eligible files/);
+  assert.doesNotMatch(result.calls[0],/✅|Looks good/);
+});
+
+test('legacy no-eligible-file skips are informational and cannot hide coverage', async () => {
+  const result=await post(JSON.stringify({status:'skipped',comments:[]}));
+  assert.deepEqual(result.failures,[]);
+  assert.match(result.calls[0],/^ℹ️/);
+  assert.match(result.calls[0],/No eligible files/);
+  assert.doesNotMatch(result.calls[0],/✅|Looks good/);
+  for(const raw of [
+    {status:'skipped'},
+    {status:'skipped',comments:[],coverage:{selected:[{path:'one.swift'}]}},
+    {status:'skipped',comments:[],coverage:{failed:[{path:'one.swift'}]}},
+    {status:'skipped',comments:[],manifest:null},
+  ]) assert.equal((await post(JSON.stringify(raw))).failures.length,1);
+});
+
+test('skipped status cannot hide selected, failed, waived, or inconsistent coverage', async () => {
+  for(const mutate of [
+    r=>{r.manifest.coverage.selected=[{path:'one.swift'}];},
+    r=>{r.manifest.coverage.failed=[{path:'one.swift'}];},
+    r=>{r.manifest.coverage.waived=[{path:'one.swift'}];},
+    r=>{r.manifest.terminal_state='complete';},
+    r=>{r.manifest=null;},
+  ]) {
+    const raw=nativeSkippedResult();mutate(raw);
+    const result=await post(JSON.stringify(raw));
+    assert.equal(result.failures.length,1);
+    assert.match(result.calls[0],/^⚠️/);
+  }
 });
 
 test('partial reviews with failed coverage never claim green', async () => {

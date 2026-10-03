@@ -25,6 +25,7 @@ jobs:
 
   review-workflow-tests:
     runs-on: ubuntu-latest
+    timeout-minutes: 5
     permissions:
       contents: read
     steps:
@@ -33,3 +34,7 @@ jobs:
         with:
           node-version: '24'
       - run: node --test .github/tests/code-review.test.cjs
+      - name: Install native OCR
+        run: npm install --global @alibaba-group/open-code-review
+      - name: Verify native DeepSeek protocol
+        run: node .github/tests/native-deepseek-smoke.cjs

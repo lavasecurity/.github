@@ -30,15 +30,15 @@ on:
   workflow_call:
     inputs:
       llm_url:
-        description: "LLM endpoint. Defaults to OpenCode Go's Chat Completions API. Overrides must match llm_model, use_anthropic, and the API key."
+        description: "LLM endpoint. Defaults to the direct DeepSeek Chat Completions API. Overrides must match llm_model, use_anthropic, and the API key."
         type: string
-        default: "https://opencode.ai/zen/go/v1"
+        default: "https://api.deepseek.com"
       llm_model:
-        description: "Model to review with. Empty selects LongCat's free preview for public repositories and GLM-5.3-Flash for private repositories. Use a bare API model id, not the opencode-go/ config prefix."
+        description: "Model to review with. Defaults to deepseek-flash for all repositories. Use a bare API model id matching the configured endpoint."
         type: string
-        default: ""
+        default: "deepseek-flash"
       use_anthropic:
-        description: "Speak the Anthropic protocol. False for the default Chat Completions models; set true with an Anthropic Messages endpoint, such as Go's MiniMax models."
+        description: "Speak the Anthropic protocol. False for the default DeepSeek Chat Completions API; set true only with an Anthropic Messages endpoint and matching credential."
         type: boolean
         default: false
       ocr_version:
@@ -47,7 +47,7 @@ on:
         default: ""
     secrets:
       llm_auth_token:
-        description: "API key for the configured LLM endpoint (e.g. your OpenCode Go API key)."
+        description: "API key for the configured LLM endpoint (DeepSeek by default)."
         required: true
 
 # One review per PR; a new push cancels the superseded run so rapid pushes don't
@@ -160,18 +160,22 @@ jobs:
       - name: Configure OCR
         env:
           OCR_LLM_URL: ${{ inputs.llm_url }}
-          # Only an explicit public flag selects the free preview. Missing visibility
-          # stays on the private default; toJSON avoids null == false coercion.
-          OCR_LLM_MODEL: ${{ inputs.llm_model || (toJSON(github.event.repository.private) == 'false' && 'longcat-2.5-preview-free' || 'glm-5.3-flash') }}
+          # Explicitly empty overrides also keep the DeepSeek default.
+          OCR_LLM_MODEL: ${{ inputs.llm_model || 'deepseek-flash' }}
           OCR_USE_ANTHROPIC: ${{ inputs.use_anthropic }}
           OCR_LLM_AUTH_TOKEN: ${{ secrets.llm_auth_token }}
         run: |
+          if [ -z "$OCR_LLM_AUTH_TOKEN" ]; then
+            echo '::error::The caller review API credential is missing.'
+            exit 1
+          fi
           ocr config set llm.url "$OCR_LLM_URL"
           ocr config set llm.auth_token "$OCR_LLM_AUTH_TOKEN"
           ocr config set llm.model "$OCR_LLM_MODEL"
           ocr config set llm.use_anthropic "$OCR_USE_ANTHROPIC"
           # Reset per-run authentication on reused runners before provider overrides.
           ocr config set llm.auth_header ''
+          ocr config set llm.extra_headers ''
           # Go requires a stable conversation identity for routing and prompt caching.
           # OCR expands its native key per conversation, including grouping and planning.
           # Scope this provider-specific header to Go; other endpoints keep their defaults.
@@ -286,9 +290,12 @@ jobs:
           PR_HEAD_SHA: ${{ github.event.pull_request.head.sha }}
           CTX_BASE_REF: ${{ steps.pr-context.outputs.base_ref }}
           CTX_HEAD_SHA: ${{ steps.pr-context.outputs.head_sha }}
-          # Large Go Chat Completions diffs can fall back to per-file dispatch.
-          # Other endpoints and ordinary reviews retain OCR's eight-worker default.
-          OCR_REVIEW_CONCURRENCY: ${{ (inputs.llm_url == 'https://opencode.ai/zen/go/v1' || inputs.llm_url == 'https://opencode.ai/zen/go/v1/') && (github.event.pull_request.changed_files || steps.pr-context.outputs.changed_files) >= 500 && 16 || 8 }}
+          # Large Go and direct DeepSeek reviews use sixteen workers when per-file
+          # dispatch is needed. Ordinary reviews and other endpoints keep eight.
+          OCR_REVIEW_CONCURRENCY: ${{ (inputs.llm_url == 'https://opencode.ai/zen/go/v1' || inputs.llm_url == 'https://opencode.ai/zen/go/v1/' || inputs.llm_url == 'https://api.deepseek.com' || inputs.llm_url == 'https://api.deepseek.com/') && (github.event.pull_request.changed_files || steps.pr-context.outputs.changed_files) >= 500 && 16 || 8 }}
+          # Two bounded resumes reuse only native-validated completed checkpoints.
+          # Keep paid/private and custom-provider request counts unchanged.
+          OCR_REVIEW_ATTEMPTS: ${{ toJSON(github.event.repository.private) == 'false' && (inputs.llm_url == 'https://opencode.ai/zen/go/v1' || inputs.llm_url == 'https://opencode.ai/zen/go/v1/') && (inputs.llm_model == 'longcat-2.5-preview-free' || inputs.llm_model == 'space-bunny-free') && (github.event.pull_request.changed_files || steps.pr-context.outputs.changed_files) >= 500 && 3 || 1 }}
         run: |
           if [ "$EVENT_NAME" = "pull_request" ]; then
             BASE_REF="$PR_BASE_REF"
@@ -346,16 +353,66 @@ jobs:
           fi
 
           echo "Reviewing ${HEAD_SHA} against ${FROM_REF}"
-          # A foreground pipeline waits for tee to flush before the dependent
-          # posting step reads diagnostics, while still streaming progress live.
-          {
-            ocr review \
-              --from "${FROM_REF}" \
-              --to "${HEAD_SHA}" \
-              --concurrency "${OCR_REVIEW_CONCURRENCY:-8}" \
-              --format json \
-              > /tmp/ocr-result.json || true
-          } 2>&1 | tee /tmp/ocr-stderr.log >&2
+          RESUME_ARGS=()
+          for REVIEW_ATTEMPT in 1 2 3; do
+            if [ "${#RESUME_ARGS[@]}" -gt 0 ]; then
+              cp /tmp/ocr-result.json /tmp/ocr-previous-result.json
+            fi
+            # A foreground pipeline waits for tee to flush before a resume or the
+            # posting step reads diagnostics, while streaming progress live.
+            {
+              ocr review \
+                --from "${FROM_REF}" \
+                --to "${HEAD_SHA}" \
+                --concurrency "${OCR_REVIEW_CONCURRENCY:-8}" \
+                "${RESUME_ARGS[@]}" \
+                --format json \
+                > /tmp/ocr-result.json || true
+            } 2>&1 | tee /tmp/ocr-stderr.log >&2
+            # A crashed or malformed resume must not erase earlier findings.
+            # Retaining its incomplete parent report also keeps the check red.
+            if [ "${#RESUME_ARGS[@]}" -gt 0 ] && ! node - "$HEAD_SHA" <<'NODE'
+          try {
+            const result = JSON.parse(require('node:fs').readFileSync('/tmp/ocr-result.json', 'utf8'));
+            const manifest = result.manifest;
+            const valid = ['complete', 'partial', 'failed', 'completed_with_errors'].includes(result.status)
+              && manifest?.schema_version === 'ocr.run-manifest/v1'
+              && ['complete', 'partial', 'failed'].includes(manifest.terminal_state)
+              && manifest.input?.resolved_head === process.argv[2]
+              && Array.isArray(result.comments)
+              && ['selected', 'completed', 'reused', 'failed', 'waived'].every(key => Array.isArray(manifest.coverage?.[key]));
+            if (!valid) process.exit(1);
+          } catch { process.exit(1); }
+          NODE
+            then
+              cp /tmp/ocr-previous-result.json /tmp/ocr-result.json
+              echo "Invalid resume output; preserving earlier incomplete findings and failing coverage."
+              break
+            fi
+            if [ "$REVIEW_ATTEMPT" -ge "${OCR_REVIEW_ATTEMPTS:-1}" ]; then break; fi
+            # Native resume validates the exact range, model and rule identities.
+            # Missing/malformed output, waived coverage and a moved head fail as
+            # before; only a genuine incomplete manifest can start a resume.
+            RESUME_ID=$(node - "$HEAD_SHA" <<'NODE'
+          try {
+            const result = JSON.parse(require('node:fs').readFileSync('/tmp/ocr-result.json', 'utf8'));
+            const manifest = result.manifest;
+            if (['partial', 'failed', 'completed_with_errors'].includes(result.status)
+                && manifest?.schema_version === 'ocr.run-manifest/v1'
+                && ['partial', 'failed'].includes(manifest.terminal_state)
+                && manifest.input?.resolved_head === process.argv[2]
+                && Array.isArray(manifest.coverage?.failed) && manifest.coverage.failed.length > 0
+                && Array.isArray(manifest.coverage?.waived) && manifest.coverage.waived.length === 0
+                && /^[0-9a-f]{8}(?:-[0-9a-f]{4}){3}-[0-9a-f]{12}$/.test(result.session_id)) {
+              process.stdout.write(result.session_id);
+            }
+          } catch {}
+          NODE
+            )
+            if [ -z "$RESUME_ID" ]; then break; fi
+            echo "Incomplete coverage; resuming validated checkpoints (attempt $((REVIEW_ATTEMPT + 1)))."
+            RESUME_ARGS=(--resume "$RESUME_ID")
+          done
           echo "=== OCR output ==="
           cat /tmp/ocr-result.json
           # Progress was streamed live; retain the same file for failure diagnostics.
@@ -413,10 +470,34 @@ jobs:
 
             const comments = result.comments || [];
             const warnings = result.warnings || [];
-            const incomplete = ['failed', 'partial', 'completed_with_errors'].includes(result.status)
-              || (result.coverage?.failed?.length || 0) > 0;
+            // Current OCR reports coverage in its native manifest. Waivers are
+            // allowed upstream but cannot satisfy this workflow's full review gate.
+            const manifest = result.manifest;
+            // Older OCR pins emit the documented skipped envelope without a manifest.
+            // Accept only its empty-comments shape with no coverage to conceal.
+            const legacySkipped = result.status === 'skipped' && manifest === undefined
+              && Array.isArray(result.comments) && result.comments.length === 0
+              && result.coverage === undefined;
+            const nativeSkipped = result.status === 'skipped'
+              && manifest?.schema_version === 'ocr.run-manifest/v1'
+              && manifest.terminal_state === 'skipped'
+              && comments.length === 0
+              && ['selected', 'completed', 'reused', 'failed', 'waived'].every(key => Array.isArray(manifest.coverage?.[key]) && manifest.coverage[key].length === 0);
+            const skippedReview = legacySkipped || nativeSkipped;
+            const nativeIncomplete = manifest !== undefined && !nativeSkipped && (
+              manifest?.schema_version !== 'ocr.run-manifest/v1'
+              || manifest.terminal_state !== 'complete'
+              || !['selected', 'completed', 'reused', 'failed', 'waived'].every(key => Array.isArray(manifest.coverage?.[key]))
+              || manifest.coverage.failed.length > 0
+              || manifest.coverage.waived.length > 0
+              || manifest.coverage.selected.length !== manifest.coverage.completed.length + manifest.coverage.reused.length
+            );
+            const incomplete = (!['success', 'complete'].includes(result.status) && !skippedReview)
+              || (result.coverage?.failed?.length || 0) > 0
+              || (result.coverage?.waived?.length || 0) > 0
+              || nativeIncomplete;
             if (incomplete) {
-              const message = result.message || 'Review failed before it completed.';
+              const message = result.message || 'Review did not complete full coverage without failures or waivers.';
               core.setFailed(message);
               await github.rest.issues.createComment({
                 owner: context.repo.owner,
@@ -429,12 +510,12 @@ jobs:
             }
 
             if (comments.length === 0) {
-              const message = result.message || 'No comments generated. Looks good to me.';
+              const message = result.message || (skippedReview ? 'No eligible files to review.' : 'No comments generated. Looks good to me.');
               await github.rest.issues.createComment({
                 owner: context.repo.owner,
                 repo: context.repo.repo,
                 issue_number: context.issue.number,
-                body: `✅ **OpenCodeReview**: ${message}`
+                body: `${skippedReview ? 'ℹ️' : '✅'} **OpenCodeReview**: ${message}`
               });
               return;
             }
