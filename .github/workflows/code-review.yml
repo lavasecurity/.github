@@ -351,6 +351,9 @@ jobs:
           echo "Reviewing ${HEAD_SHA} against ${FROM_REF}"
           RESUME_ARGS=()
           for REVIEW_ATTEMPT in 1 2 3; do
+            if [ "${#RESUME_ARGS[@]}" -gt 0 ]; then
+              cp /tmp/ocr-result.json /tmp/ocr-previous-result.json
+            fi
             # A foreground pipeline waits for tee to flush before a resume or the
             # posting step reads diagnostics, while streaming progress live.
             {
@@ -362,6 +365,26 @@ jobs:
                 --format json \
                 > /tmp/ocr-result.json || true
             } 2>&1 | tee /tmp/ocr-stderr.log >&2
+            # A crashed or malformed resume must not erase earlier findings.
+            # Retaining its incomplete parent report also keeps the check red.
+            if [ "${#RESUME_ARGS[@]}" -gt 0 ] && ! node - "$HEAD_SHA" <<'NODE'
+          try {
+            const result = JSON.parse(require('node:fs').readFileSync('/tmp/ocr-result.json', 'utf8'));
+            const manifest = result.manifest;
+            const valid = ['complete', 'partial', 'failed', 'completed_with_errors'].includes(result.status)
+              && manifest?.schema_version === 'ocr.run-manifest/v1'
+              && ['complete', 'partial', 'failed'].includes(manifest.terminal_state)
+              && manifest.input?.resolved_head === process.argv[2]
+              && Array.isArray(result.comments)
+              && ['selected', 'completed', 'reused', 'failed', 'waived'].every(key => Array.isArray(manifest.coverage?.[key]));
+            if (!valid) process.exit(1);
+          } catch { process.exit(1); }
+          NODE
+            then
+              cp /tmp/ocr-previous-result.json /tmp/ocr-result.json
+              echo "Invalid resume output; preserving earlier incomplete findings and failing coverage."
+              break
+            fi
             if [ "$REVIEW_ATTEMPT" -ge "${OCR_REVIEW_ATTEMPTS:-1}" ]; then break; fi
             # Native resume validates the exact range, model and rule identities.
             # Missing/malformed output, waived coverage and a moved head fail as

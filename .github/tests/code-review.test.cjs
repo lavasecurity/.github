@@ -125,11 +125,16 @@ if(process.env.OCR_TEST_MODE==='wrong-head')result.manifest.input.resolved_head=
 if(process.env.OCR_TEST_MODE==='bad-session')result.session_id='../../arbitrary';
 if(process.env.OCR_TEST_MODE==='waived')result.manifest.coverage.waived=[{path:'waived.swift'}];
 if(process.env.OCR_TEST_MODE==='legacy')delete result.manifest;
+if(calls.length>1&&process.env.OCR_TEST_MODE==='resume-wrong-head')result.manifest.input.resolved_head='2'.repeat(40);
+if(calls.length>1&&process.env.OCR_TEST_MODE==='resume-legacy')delete result.manifest;
+if(calls.length>1&&process.env.OCR_TEST_MODE==='resume-malformed'){process.stdout.write('not JSON');process.exit(0);}
+if(calls.length>1&&process.env.OCR_TEST_MODE==='resume-empty')process.exit(1);
 process.stdout.write(process.env.OCR_TEST_MODE==='malformed'?'not JSON':JSON.stringify(result));
 `, {mode:0o755});
     const capture = join(dir, 'calls.json'), output = join(dir, 'result.json');
     const body = stepBody('Run OpenCodeReview', 'run')
-      .replaceAll('/tmp/ocr-result.json', output).replaceAll('/tmp/ocr-stderr.log', join(dir, 'stderr.log'));
+      .replaceAll('/tmp/ocr-result.json', output).replaceAll('/tmp/ocr-stderr.log', join(dir, 'stderr.log'))
+      .replaceAll('/tmp/ocr-previous-result.json', join(dir, 'previous.json'));
     const result = spawnSync('bash', ['-e', '-c', body], {env:{...process.env,PATH:`${dir}:${process.env.PATH}`,
       OCR_CAPTURE:capture,OCR_TEST_MODE:mode,OCR_REVIEW_ATTEMPTS:String(attempts),OCR_REVIEW_CONCURRENCY:'16',
       EVENT_NAME:'pull_request',PR_ACTION:'opened',PR_BASE_REF:'main',PR_HEAD_SHA:head}});
@@ -168,6 +173,20 @@ test('resume exhaustion and invalid manifests remain red', async () => {
     assert.equal(result.calls.length,1,mode);
   }
   assert.equal(runResumeFixture('recover',1).calls.length,1);
+});
+
+test('invalid resume output preserves earlier findings and remains red', async () => {
+  for (const mode of ['resume-malformed','resume-empty','resume-legacy','resume-wrong-head']) {
+    const {calls,raw,session} = runResumeFixture(mode);
+    assert.equal(calls.length,2,mode);
+    const result = JSON.parse(raw);
+    assert.equal(result.status,'partial',mode);
+    assert.equal(result.session_id,session,mode);
+    assert.deepEqual(result.comments,[{path:'already-reviewed.swift',body:'retained finding'}],mode);
+    // Exercise the existing red coverage gate without needing GitHub line positions.
+    result.comments=[];
+    assert.equal((await post(JSON.stringify(result))).failures.length,1,mode);
+  }
 });
 
 test('review progress reaches the job log before the result completes', async () => {
