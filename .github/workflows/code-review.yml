@@ -75,8 +75,9 @@ jobs:
     runs-on: ${{ (github.event.repository.private && (github.event_name != 'pull_request' || github.event.pull_request.head.repo.fork == false)) && fromJSON(vars.LINUX_CI_RUNNER || '["ubicloud-standard-2"]') || fromJSON('["ubuntu-latest"]') }}
     # Keep the ordinary PR cap; full source syncs need enough time to review hundreds
     # of files. On-demand payloads omit changed_files, so allow the same bounded full
-    # review budget there. Trigger/trust gates below still apply before any work.
-    timeout-minutes: ${{ (github.event_name == 'issue_comment' || github.event.pull_request.changed_files >= 500) && 90 || 30 }}
+    # review budget there, bounded by GitHub's six-hour hosted job limit.
+    # Trigger/trust gates below still apply before any work.
+    timeout-minutes: ${{ (github.event_name == 'issue_comment' || github.event.pull_request.changed_files >= 500) && 360 || 30 }}
     # Runs for:
     #   * a same-repo PR (fork heads never receive the secret, so they'd fail
     #     the config/review/post steps on an empty token — skip them cleanly), or
@@ -128,6 +129,7 @@ jobs:
             core.setOutput('base_ref', pullRequest.base.ref);
             core.setOutput('head_ref', pullRequest.head.ref);
             core.setOutput('head_sha', pullRequest.head.sha);
+            core.setOutput('changed_files', pullRequest.changed_files);
 
       - name: Checkout repository
         uses: actions/checkout@v7
@@ -284,6 +286,9 @@ jobs:
           PR_HEAD_SHA: ${{ github.event.pull_request.head.sha }}
           CTX_BASE_REF: ${{ steps.pr-context.outputs.base_ref }}
           CTX_HEAD_SHA: ${{ steps.pr-context.outputs.head_sha }}
+          # Large Go Chat Completions diffs can fall back to per-file dispatch.
+          # Other endpoints and ordinary reviews retain OCR's eight-worker default.
+          OCR_REVIEW_CONCURRENCY: ${{ (inputs.llm_url == 'https://opencode.ai/zen/go/v1' || inputs.llm_url == 'https://opencode.ai/zen/go/v1/') && (github.event.pull_request.changed_files || steps.pr-context.outputs.changed_files) >= 500 && 16 || 8 }}
         run: |
           if [ "$EVENT_NAME" = "pull_request" ]; then
             BASE_REF="$PR_BASE_REF"
@@ -347,6 +352,7 @@ jobs:
             ocr review \
               --from "${FROM_REF}" \
               --to "${HEAD_SHA}" \
+              --concurrency "${OCR_REVIEW_CONCURRENCY:-8}" \
               --format json \
               > /tmp/ocr-result.json || true
           } 2>&1 | tee /tmp/ocr-stderr.log >&2
